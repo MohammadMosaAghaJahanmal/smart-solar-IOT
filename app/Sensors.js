@@ -1,17 +1,19 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Animated,
   Dimensions,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+
 import { LineChart } from "react-native-gifted-charts";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const screenWidth = Dimensions.get("window").width;
 
@@ -99,6 +101,7 @@ export default function Sensors() {
       {/* =========================
           CARDS
       ========================= */}
+      <ScrollView>
       {sensors.map((s) => {
         const data = getSensorData(s.key);
         const lastValue = data.current[data.current.length - 1] || 0;
@@ -154,6 +157,8 @@ export default function Sensors() {
           </Animated.View>
         );
       })}
+      </ScrollView>
+
 
       {/* =========================
           MODAL
@@ -241,7 +246,7 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   sensorTouchable: {
-    flex: 1,
+    padding: 5
   },
   cardHeader: {
     flexDirection: 'row',
