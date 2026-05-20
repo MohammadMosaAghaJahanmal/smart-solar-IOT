@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  Alert,
   Dimensions,
   Linking,
   PermissionsAndroid,
@@ -110,10 +111,11 @@ const openWifiSettings = async () => {
     if (Platform.OS === "android") {
       await Linking.sendIntent("android.settings.WIFI_SETTINGS");
     } else {
-      await Linking.openSettings();
+      await Linking.openURL("App-Prefs:WIFI");
     }
   } catch (e) {
     console.log("WiFi open error:", e);
+    await Linking.openSettings();
   }
 };
 
@@ -160,19 +162,31 @@ const startLiveData = async () => {
     }
   };
   const handleWifiToggle = async () => {
-  const newState = !wifiOn;
-  setWifiOn(newState);
+    const newState = !wifiOn;
 
-  if (newState) {
     try {
-      await startLiveData();
-    } catch (e) {
-      console.log("Start live data error:", e);
+
+
+    if (newState) {
+      const isEnabled = await WifiManager.isEnabled();
+
+      if (isEnabled) {
+        setWifiOn(true);
+        await startLiveData();
+      } else {
+        setWifiOn(false);
+        await openWifiSettings();
+      }
+    } else {
+      setWifiOn(false);
+      stopLiveData();
     }
-  } else {
-    stopLiveData();
+        
+    } catch (error) {
+      Alert.alert("Press The wifi button again and allow location permission to connect to the device.");
+      console.log("WiFi toggle error:", error);
+    }
   }
-};
 const openLocationSettings = async () => {
   try {
     if (Platform.OS === "android") {
