@@ -128,12 +128,12 @@ const startLiveData = async () => {
       return;
     }
 
-    await WifiManager.connectToProtectedSSID(
-      "ESP32_HOTSPOT",
-      "12345678",
-      false,
-      false
-    );
+    // await WifiManager.connectToProtectedSSID(
+    //   "ESP32_HOTSPOT",
+    //   "solar1234",
+    //   false,
+    //   false
+    // );
 
     const interval = setInterval(async () => {
       try {
@@ -261,20 +261,33 @@ const openLocationSettings = async () => {
 
           {/* CHART */}
           <View style={styles.chartCard}>
-            <LineChart
-              data={graphData}
-              width={screenWidth - 32}
-              height={300}
-              chartConfig={{
-                backgroundGradientFrom: "#0B1220",
-                backgroundGradientTo: "#0B1220",
-                color: () => "#fff",
-                labelColor: () => "#94A3B8",
-                propsForDots: { r: "0" },
-              }}
-              bezier
-              withDots={false}
-            />
+<LineChart
+  data={graphData}
+  width={screenWidth - 32}
+  height={300}
+  bezier
+  withDots={true}
+  withInnerLines={true}
+  withOuterLines={true}
+  chartConfig={{
+    backgroundGradientFrom: "#0B1220",
+    backgroundGradientTo: "#0B1220",
+    decimalPlaces: 0,
+
+    color: (opacity = 1) => `rgba(255,255,255,${opacity})`,
+    labelColor: () => "#94A3B8",
+
+    propsForDots: {
+      r: "6",
+      strokeWidth: "2",
+      stroke: "#fff",
+    },
+  }}
+  getDotColor={(dataPoint, index) => {
+    if (index === 0) return "#FF6384"; // previous
+    return "#22C55E"; // current
+  }}
+/>
           </View>
         </ScrollView>
       )}
