@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.virtualcamerapro.broker" android:sharedUserId="android.uid.system">
+    <uses-sdk android:minSdkVersion="36" android:targetSdkVersion="36" />
+    <permission android:name="com.virtualcamerapro.permission.CONTROL" android:protectionLevel="signature|knownSigner" android:knownCerts="@array/controller_certs" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.DUMP" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <application android:label="Virtual Camera System Service" android:allowBackup="false" android:directBootAware="false">
+        <service android:name=".BrokerService" android:exported="true" android:permission="com.virtualcamerapro.permission.CONTROL" android:foregroundServiceType="specialUse|camera">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Supply selected media frames to the AOSP virtual camera provider" />
+        </service>
+    </application>
+</manifest>

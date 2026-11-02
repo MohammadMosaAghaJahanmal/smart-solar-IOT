@@ -1,0 +1,134 @@
+--- a/services/camera/libcameraservice/CameraService.cpp
++++ b/services/camera/libcameraservice/CameraService.cpp
+@@ -79,6 +79,7 @@
+ #include <system/camera.h>
+ 
+ #include "CameraService.h"
++#include "VirtualCameraProRoute.h"
+ #include "api1/Camera2Client.h"
+ #include "api2/CameraDeviceClient.h"
+ #include "utils/CameraServiceProxyWrapper.h"
+@@ -95,6 +96,13 @@
+     const char* kVirtualDeviceBackCameraId = "0";
+     const char* kVirtualDeviceFrontCameraId = "1";
+     const char* kUnknownPackageName = "<unknown>";
++
++    // Virtual Camera Pro: only default-device camera IDs pass this routing gate.
++    std::string resolveVirtualCameraPro(const std::string& id) {
++        char record[PROPERTY_VALUE_MAX] = {};
++        property_get("sys.vcam.route", record, "");
++        return android::vcam::resolve(id, record, android::elapsedRealtime());
++    }
+ 
+     android::PermissionChecker::PermissionResult appOpModeToPermissionResult(int32_t res) {
+         switch (res) {
+@@ -1201,7 +1209,7 @@
+             ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+             return std::nullopt;
+         }
+-        return inputCameraId;
++        return resolveVirtualCameraPro(inputCameraId);
+     }
+ 
+     return mVirtualDeviceCameraIdMapper.getActualCameraId(deviceId, inputCameraId);
+@@ -1280,7 +1288,7 @@
+         return std::string{};
+     }
+ 
+-    return (*cameraIds)[cameraIdInt];
++    return resolveVirtualCameraPro((*cameraIds)[cameraIdInt]);
+ }
+ 
+ std::string CameraService::cameraIdIntToStr(int cameraIdInt, int32_t deviceId,
+@@ -5650,6 +5658,24 @@
+                 getCallingUid());
+         return NO_ERROR;
+     }
++    // A privileged broker verifies the actual framework hook, not just a build property.
++    if (args.size() == 1 && args[0] == String16("--virtual-camera-pro")) {
++        const bool acquired = tryLock(mServiceLock);
++        char record[PROPERTY_VALUE_MAX] = {};
++        property_get("sys.vcam.route", record, "");
++        const auto route = android::vcam::parseRoute(record, android::elapsedRealtime());
++        const bool registered = acquired && route && getCameraState(route->synthetic) != nullptr;
++        dprintf(fd, "{\"protocol\":2,\"initialized\":%s,\"responsive\":%s,"
++                "\"routeInstalled\":%s,\"registered\":%s,\"physicalId\":\"%s\","
++                "\"syntheticId\":\"%s\",\"resolvedId\":\"%s\"}\n",
++                acquired && mInitialized ? "true" : "false", acquired ? "true" : "false",
++                route ? "true" : "false", registered ? "true" : "false",
++                route ? route->physical.c_str() : "", route ? route->synthetic.c_str() : "",
++                route ? resolveVirtualCameraPro(route->physical).c_str() : "");
++        if (acquired) mServiceLock.unlock();
++        return NO_ERROR;
++    }
++
+     bool locked = tryLock(mServiceLock);
+     // failed to lock - CameraService is probably deadlocked
+     if (!locked) {
+--- a/services/camera/libcameraservice/common/CameraProviderManager.cpp
++++ b/services/camera/libcameraservice/common/CameraProviderManager.cpp
+@@ -3648,7 +3648,7 @@
+ }
+ 
+ bool CameraProviderManager::isVirtualCameraHalEnabled() {
+-    return vd_flags::virtual_camera_service_build_flag();
++    return true;  // Virtual Camera Pro controlled system image
+ }
+ 
+ } // namespace android
+--- a/services/camera/virtualcamera/VirtualCameraService.cc
++++ b/services/camera/virtualcamera/VirtualCameraService.cc
+@@ -236,6 +236,7 @@
+ }
+ 
+ std::string createCameraId(const int32_t deviceId) {
++  if (deviceId == 0) return "v0_pro";
+   return kCameraIdPrefix + std::to_string(deviceId) + "_" +
+          std::to_string(sNextIdNumericalPortion++);
+ }
+@@ -306,6 +307,20 @@
+         reinterpret_cast<uintptr_t>(token.get()));
+     *_aidl_return = false;
+     return ndk::ScopedAStatus::ok();
++  }
++
++  // Only the controlled primary-display broker uses this stable ID.
++  // Remove an orphan left behind by its previous process before re-registering.
++  if (deviceId == 0 && cameraId == "v0_pro") {
++    for (auto it = mTokenToCameraName.begin(); it != mTokenToCameraName.end();) {
++      auto previous = mVirtualCameraProvider->getCamera(it->second);
++      if (previous != nullptr && previous->getCameraId() == cameraId) {
++        mVirtualCameraProvider->removeCamera(it->second);
++        it = mTokenToCameraName.erase(it);
++      } else {
++        ++it;
++      }
++    }
+   }
+ 
+   std::shared_ptr<VirtualCameraDevice> camera =
+--- a/services/camera/virtualcamera/util/Permissions.cc
++++ b/services/camera/virtualcamera/util/Permissions.cc
+@@ -18,6 +18,9 @@
+ #define LOG_TAG "VirtualCameraPermissions"
+ 
+ #include "Permissions.h"
++#include <binder/IPCThreadState.h>
++#include <android-base/properties.h>
++#include <private/android_filesystem_config.h>
+ 
+ #include "binder/PermissionCache.h"
+ #include "log/log_main.h"
+@@ -34,6 +37,12 @@
+ 
+ bool PermissionsProxyImpl::checkCallingPermission(
+     const std::string& permission) const {
++  // The platform-signed system UID broker is authorized on this product only.
++  if (permission == "android.permission.CREATE_VIRTUAL_DEVICE" &&
++      IPCThreadState::self()->getCallingUid() == AID_SYSTEM &&
++      android::base::GetProperty("ro.virtualcamera.pro.version", "") == "2") {
++    return true;
++  }
+   int32_t uid;
+   int32_t pid;
+   const bool hasPermission = PermissionCache::checkCallingPermission(

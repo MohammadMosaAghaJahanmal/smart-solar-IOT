@@ -1,0 +1,69 @@
+{
+  "tag": "android-9.0.0_r1",
+  "headers": [
+    {
+      "file": "hardware/camera3.h",
+      "source": "https://android.googlesource.com/platform/hardware/libhardware/+/android-9.0.0_r1/include/hardware/camera3.h?format=TEXT"
+    },
+    {
+      "file": "hardware/camera_common.h",
+      "source": "https://android.googlesource.com/platform/hardware/libhardware/+/android-9.0.0_r1/include/hardware/camera_common.h?format=TEXT"
+    },
+    {
+      "file": "hardware/hardware.h",
+      "source": "https://android.googlesource.com/platform/hardware/libhardware/+/android-9.0.0_r1/include/hardware/hardware.h?format=TEXT"
+    },
+    {
+      "file": "system/camera_metadata.h",
+      "source": "https://android.googlesource.com/platform/system/media/+/android-9.0.0_r1/camera/include/system/camera_metadata.h?format=TEXT"
+    },
+    {
+      "file": "system/camera_metadata_tags.h",
+      "source": "https://android.googlesource.com/platform/system/media/+/android-9.0.0_r1/camera/include/system/camera_metadata_tags.h?format=TEXT"
+    },
+    {
+      "file": "system/camera_vendor_tags.h",
+      "source": "https://android.googlesource.com/platform/system/media/+/android-9.0.0_r1/camera/include/system/camera_vendor_tags.h?format=TEXT"
+    },
+    {
+      "file": "system/graphics.h",
+      "source": "https://android.googlesource.com/platform/system/core/+/android-9.0.0_r1/libsystem/include/system/graphics.h?format=TEXT"
+    },
+    {
+      "file": "cutils/native_handle.h",
+      "source": "https://android.googlesource.com/platform/system/core/+/android-9.0.0_r1/libcutils/include/cutils/native_handle.h?format=TEXT"
+    },
+    {
+      "file": "cutils/compiler.h",
+      "source": "https://android.googlesource.com/platform/system/core/+/android-9.0.0_r1/libcutils/include/cutils/compiler.h?format=TEXT"
+    },
+    {
+      "file": "hardware/gralloc.h",
+      "source": "https://android.googlesource.com/platform/hardware/libhardware/+/android-9.0.0_r1/include/hardware/gralloc.h?format=TEXT"
+    },
+    {
+      "file": "system/camera.h",
+      "source": "https://android.googlesource.com/platform/system/core/+/android-9.0.0_r1/libsystem/include/system/camera.h?format=TEXT"
+    },
+    {
+      "file": "system/graphics-base.h",
+      "source": "https://android.googlesource.com/platform/system/core/+/android-9.0.0_r1/libsystem/include/system/graphics-base.h?format=TEXT"
+    },
+    {
+      "file": "hardware/fb.h",
+      "source": "https://android.googlesource.com/platform/hardware/libhardware/+/android-9.0.0_r1/include/hardware/fb.h?format=TEXT"
+    },
+    {
+      "file": "system/graphics-base-v1.0.h",
+      "source": "https://android.googlesource.com/platform/system/core/+/android-9.0.0_r1/libsystem/include/system/graphics-base-v1.0.h?format=TEXT"
+    },
+    {
+      "file": "system/graphics-base-v1.1.h",
+      "source": "https://android.googlesource.com/platform/system/core/+/android-9.0.0_r1/libsystem/include/system/graphics-base-v1.1.h?format=TEXT"
+    },
+    {
+      "file": "system/graphics-sw.h",
+      "source": "https://android.googlesource.com/platform/system/core/+/android-9.0.0_r1/libsystem/include/system/graphics-sw.h?format=TEXT"
+    }
+  ]
+}

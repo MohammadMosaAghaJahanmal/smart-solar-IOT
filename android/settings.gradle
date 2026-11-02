@@ -1,0 +1,12 @@
+pluginManagement { includeBuild("../node_modules/@react-native/gradle-plugin") }
+plugins { id("com.facebook.react.settings") }
+extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
+rootProject.name = 'VirtualCameraPro'
+include ':app'
+include ':broker', ':camera-client'
+include ':emulator-broker'
+include ':system-tests'
+include ':guest-tools'
+include ':vmos-broker'
+include ':vmos-bridge'
+includeBuild('../node_modules/@react-native/gradle-plugin')

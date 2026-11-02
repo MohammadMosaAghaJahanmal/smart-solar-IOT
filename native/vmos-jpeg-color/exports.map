@@ -1,0 +1,9 @@
+{
+  global:
+    JpegStub_init;
+    JpegStub_cleanup;
+    JpegStub_compress;
+    JpegStub_getCompressedImage;
+    JpegStub_getCompressedSize;
+  local: *;
+};

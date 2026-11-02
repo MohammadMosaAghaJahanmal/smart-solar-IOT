@@ -1,0 +1,62 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+
+// This is an alternative broker for the explicitly inspected VMOS guest only.
+// It shares the controller's development certificate, never the host system UID.
+def proxyAssets = layout.buildDirectory.dir("generated/proxyAssets")
+def bundleProxy = tasks.register("bundleVmosProxy") {
+    def binary = file(providers.gradleProperty("vcamProxyBinary").getOrElse("../../artifacts/vmos/vmos-camera-proxy"))
+    def wrapper = file("../../artifacts/vmos/camera.vphw90.crop-wrapper.so")
+    inputs.file(binary)
+    inputs.file(wrapper)
+    outputs.dir(proxyAssets)
+    doLast {
+        if (!binary.isFile()) throw new GradleException("Build the audited ARM64 proxy with scripts/build-vmos-camera.ps1 first")
+        if (!wrapper.isFile()) throw new GradleException("Build the audited ARM64 camera adapter with scripts/build-vmos-hal-wrapper.ps1 first")
+        def target = proxyAssets.get().asFile
+        target.mkdirs()
+        copy { from binary; into target; rename { "vmos-camera-proxy" } }
+        def digest = java.security.MessageDigest.getInstance("SHA-256").digest(binary.bytes)
+        new File(target, "vmos-camera-proxy.sha256").text = digest.collect { String.format("%02x", it & 255) }.join("") + "\n"
+        copy { from wrapper; into target }
+        def wrapperDigest = java.security.MessageDigest.getInstance("SHA-256").digest(wrapper.bytes)
+        new File(target, "camera.vphw90.crop-wrapper.so.sha256").text = wrapperDigest.collect { String.format("%02x", it & 255) }.join("") + "\n"
+    }
+}
+
+android {
+    namespace "com.virtualcamerapro.broker"
+    compileSdk 36
+    defaultConfig {
+        applicationId "com.virtualcamerapro.broker"
+        minSdk 28
+        targetSdk 28
+        versionCode 1
+        versionName "3.0-vmos-development"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+    buildFeatures { aidl true }
+    signingConfigs {
+        controller {
+            storeFile file("../app/debug.keystore")
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
+    }
+    buildTypes { debug { signingConfig signingConfigs.controller } }
+    sourceSets.main {
+        java.srcDirs += ["../../native/camera-probe/src/main/java", "../../native/frame-engine/src/main/java"]
+        aidl.srcDirs = ["../../native/ipc"]
+        assets.srcDir(proxyAssets)
+    }
+    sourceSets.androidTest.assets.srcDir("../camera-client/src/androidTest/assets")
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = "17" }
+}
+tasks.named("preBuild").configure { dependsOn(bundleProxy) }
+
+dependencies {
+    androidTestImplementation "androidx.test:runner:1.6.2"
+    androidTestImplementation "androidx.test.ext:junit:1.2.1"
+}

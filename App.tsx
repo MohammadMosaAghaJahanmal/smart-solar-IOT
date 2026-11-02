@@ -1,7 +1,10 @@
-import React from "react";
-import "./app/i18n.js";
-import Dashboard from "./app/_layout";
-
+import React from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { CameraScreen } from './src/screens/CameraScreen';
 export default function App() {
-  return <Dashboard />;
+  return (
+    <SafeAreaProvider>
+      <CameraScreen />
+    </SafeAreaProvider>
+  );
 }

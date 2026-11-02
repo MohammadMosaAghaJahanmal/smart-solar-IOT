@@ -1,0 +1,6 @@
+<exceptions>
+    <exception package="com.virtualcamerapro.broker">
+        <permission name="android.permission.CAMERA" fixed="true" />
+        <permission name="android.permission.POST_NOTIFICATIONS" fixed="true" />
+    </exception>
+</exceptions>

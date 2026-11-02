@@ -1,0 +1,24 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+
+// Explicit emulator-only alternative APK. Never included in the production
+// AOSP product, which continues to use :broker / VirtualCameraProBroker.
+android {
+    namespace "com.virtualcamerapro.broker"
+    compileSdk 36
+    defaultConfig {
+        applicationId "com.virtualcamerapro.broker"
+        minSdk 36
+        targetSdk 36
+        versionCode 1
+        versionName "2.0-emulator"
+    }
+    buildFeatures { aidl true }
+    sourceSets.main {
+        java.srcDirs += ["../../native/camera-probe/src/main/java"]
+        aidl.srcDirs = ["../../native/ipc"]
+        res.srcDirs += ["../../aosp/system-service/res"]
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = "17" }
+}

@@ -1,0 +1,22 @@
+{
+  "guest": {
+    "sdk": 28,
+    "hardware": "vphw90",
+    "abi": "arm64-v8a"
+  },
+  "originalSha256": "362261e9d1924bde73652cd8f2c467fbaabc59f50ad66e0b4de0215291ec6d3c",
+  "transportSha256": "02042c56980813c89611698d6501ccd78ca05c8a9827a55aa2c21e634bd5086a",
+  "bytes": 2109016,
+  "HMI": {
+    "symbolVirtualAddress": "0xc0008",
+    "fileOffset": "0xb0008",
+    "objectBytes": 344,
+    "moduleApiVersion": "0x0203",
+    "halApiVersion": "0x0100",
+    "torchCallback": null,
+    "initCallback": null,
+    "selfSymbolGotRelocation": "0xbce60"
+  },
+  "note": "Provider service version 2.4 is distinct from legacy module 2.3. The wrapper forwards the real module pointer because device_open compares its own HMI relocation. Current transport includes the verified NV21 scaled-copy chroma repair; original 362 recovery identity is unchanged. Device loader, Camera2 pixel crops and stock-camera pinch acceptance passed on the measured guest; see artifacts/vmos/crop-acceptance.json.",
+  "legacySocketOnlyTransportSha256": "1c80cb9711b08d28625e140263b6bd85aadaf2c6a1de50d161e19fc6e1773a97"
+}

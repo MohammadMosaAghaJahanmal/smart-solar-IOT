@@ -1,0 +1,27 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+android {
+    namespace "com.virtualcamerapro.client"
+    compileSdk 36
+    defaultConfig {
+        applicationId "com.virtualcamerapro.client"
+        minSdk 28
+        targetSdk 36
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = "17" }
+    sourceSets.androidTest.java.srcDir "../../native/frame-engine/src/main/java"
+    sourceSets.androidTest.java.srcDir "../../native/camera-probe/src/main/java"
+}
+dependencies {
+    implementation "androidx.activity:activity-ktx:1.10.1"
+    implementation "androidx.camera:camera-camera2:1.5.1"
+    implementation "androidx.camera:camera-lifecycle:1.5.1"
+    implementation "androidx.camera:camera-view:1.5.1"
+    androidTestImplementation "androidx.test:runner:1.6.2"
+    androidTestImplementation "androidx.test:rules:1.6.1"
+    androidTestImplementation "androidx.test.ext:junit:1.2.1"
+}

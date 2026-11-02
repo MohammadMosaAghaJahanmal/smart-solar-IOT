@@ -1,0 +1,6 @@
+{
+  global:
+    Java_com_android_camera_util_JpegUtilNative_compressJpegFromYUV420pNative;
+    Java_com_android_camera_util_JpegUtilNative_copyImagePlaneToBitmap;
+  local: *;
+};

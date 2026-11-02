@@ -1,0 +1,7 @@
+system_internal_prop(vcam_route_prop)
+set_prop(system_app, vcam_route_prop)
+get_prop(cameraserver, vcam_route_prop)
+allow system_app virtual_camera_service:service_manager find;
+binder_call(system_app, virtual_camera)
+# TransferPipe diagnostics write only to the broker-created pipe.
+allow cameraserver system_app:fifo_file write;

@@ -1,0 +1,11 @@
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.patch text eol=lf
+*.aidl text eol=lf
+gradlew text eol=lf
+*.bat text eol=crlf
+*.png binary
+*.mp4 binary
+*.jar binary
+*.keystore binary

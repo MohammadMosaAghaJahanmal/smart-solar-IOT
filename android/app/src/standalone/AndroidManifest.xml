@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Public Camera2 diagnostics in the standalone acceptance build run as the controller UID. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+</manifest>

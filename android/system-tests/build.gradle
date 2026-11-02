@@ -1,0 +1,27 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+// Compilation check only. Acceptance requires the platform-signed Soong build.
+android {
+    namespace "com.virtualcamerapro.systemtests"
+    compileSdk 36
+    defaultConfig {
+        applicationId "com.virtualcamerapro.systemtests"
+        minSdk 36
+        targetSdk 36
+        versionCode 1
+        versionName "2.0"
+    }
+    buildFeatures { aidl true }
+    sourceSets.main {
+        manifest.srcFile "../../aosp/system-tests/AndroidManifest.xml"
+        java.srcDirs = ["../../aosp/system-tests/src", "../../native/camera-probe/src/main/java"]
+        aidl.srcDirs = ["../../native/ipc"]
+        assets.srcDirs = ["../camera-client/src/androidTest/assets"]
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = "17" }
+}
+dependencies {
+    implementation "androidx.test:runner:1.6.2"
+    implementation "androidx.test.ext:junit:1.2.1"
+}

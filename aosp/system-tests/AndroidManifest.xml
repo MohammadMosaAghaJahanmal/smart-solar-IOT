@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.virtualcamerapro.systemtests">
+    <uses-sdk android:minSdkVersion="36" android:targetSdkVersion="36" />
+    <uses-permission android:name="com.virtualcamerapro.permission.CONTROL" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+    <queries><package android:name="com.virtualcamerapro.broker" /><package android:name="com.android.camera2" /></queries>
+    <application android:label="Virtual Camera system acceptance" android:allowBackup="false" />
+    <instrumentation android:name="androidx.test.runner.AndroidJUnitRunner" android:targetPackage="com.virtualcamerapro.systemtests" android:label="Real camera output acceptance" />
+</manifest>

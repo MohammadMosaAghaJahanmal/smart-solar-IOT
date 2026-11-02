@@ -1,0 +1,34 @@
+package { default_applicable_licenses: ["Android-Apache-2.0"] }
+
+java_library {
+    name: "virtualcamerapro-ipc",
+    srcs: ["native/ipc/**/*.aidl"],
+    aidl: { local_include_dirs: ["native/ipc"] },
+    installable: false,
+}
+
+android_app {
+    name: "VirtualCameraProBroker",
+    manifest: "system-service/AndroidManifest.xml",
+    srcs: ["system-service/src/**/*.kt", "native/frame-engine/src/main/java/**/*.kt", "native/camera-probe/src/main/java/**/*.kt"],
+    resource_dirs: ["system-service/res"],
+    static_libs: ["virtual_camera_service_aidl-java", "virtualcamerapro-ipc"],
+    platform_apis: true,
+    certificate: "platform",
+    privileged: true,
+    optimize: { enabled: false },
+    required: ["virtual_camera"],
+}
+
+// A separate camera-consuming process. Tests fail if any image prerequisite is absent.
+android_test {
+    name: "VirtualCameraProSystemTests",
+    manifest: "system-tests/AndroidManifest.xml",
+    srcs: ["system-tests/src/**/*.kt", "native/camera-probe/src/main/java/**/*.kt"],
+    asset_dirs: ["system-tests/assets"],
+    static_libs: ["virtualcamerapro-ipc", "androidx.test.runner", "androidx.test.ext.junit"],
+    platform_apis: true,
+    certificate: "platform",
+    test_suites: ["device-tests"],
+    optimize: { enabled: false },
+}

@@ -1,17 +1,20 @@
 {
-  "extends": "expo/tsconfig.base",
+  "extends": "@react-native/typescript-config",
   "compilerOptions": {
-    "strict": true,
-    "paths": {
-      "@/*": [
-        "./*"
-      ]
-    }
+    "types": [
+      "jest"
+    ]
   },
   "include": [
-    "**/*.ts",
-    "**/*.tsx",
-    ".expo/types/**/*.ts",
-    "expo-env.d.ts"
-, "app/_layout.js", "app/Angle.js", "app/LanguageContext.js", "app/Sensors.js", "app/Setting.js"  ]
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "specs/**/*.ts",
+    "App.tsx",
+    "tests/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "android",
+    "tools"
+  ]
 }

@@ -1,0 +1,7 @@
+$ErrorActionPreference = 'Stop'
+$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$log = Join-Path $repo 'artifacts\vmos\crop-wrapper-host-tests.log'
+& wsl.exe --cd $repo --exec sh -c 'g++ -std=c++17 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -fno-omit-frame-pointer -I native/vmos-camera/hal-wrapper/include native/vmos-camera/hal-wrapper/wrapper-test.cpp -pthread -ldl -o /tmp/vcam-wrapper-test && /tmp/vcam-wrapper-test' 2>&1 | Tee-Object -FilePath $log
+if ($LASTEXITCODE) { throw 'Camera3 wrapper C ABI / crop / socket / sanitizer tests failed' }
+& wsl.exe --cd $repo --exec sh -c 'g++ -std=c++17 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -fPIC -shared -I native/vmos-camera/hal-wrapper/include native/vmos-camera/hal-wrapper/loader-mock.cpp -o /tmp/vcam-loader-mock.so && g++ -std=c++17 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -DVCAM_WRAPPER_LOADER_TEST -fPIC -shared -fvisibility=hidden -Wl,-soname,libvcam_camera_crop.so -Wl,--version-script=native/vmos-camera/hal-wrapper/exports.map -I native/vmos-camera/hal-wrapper/include native/vmos-camera/hal-wrapper/camera-wrapper.cpp -pthread -ldl -o /tmp/vcam-loader-wrapper.so && g++ -std=c++17 -O2 -Wall -Wextra -Werror -I native/vmos-camera/hal-wrapper/include native/vmos-camera/hal-wrapper/loader-test.cpp -pthread -ldl -o /tmp/vcam-loader-test && /tmp/vcam-loader-test /tmp/vcam-loader-wrapper.so /tmp/vcam-loader-mock.so' 2>&1 | Tee-Object -Append -FilePath $log
+if ($LASTEXITCODE) { throw 'Camera3 wrapper separate-DSO loader test failed' }

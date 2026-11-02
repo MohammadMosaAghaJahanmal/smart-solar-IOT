@@ -1,0 +1,5 @@
+<permissions>
+    <privapp-permissions package="com.virtualcamerapro.broker">
+        <permission name="android.permission.DUMP" />
+    </privapp-permissions>
+</permissions>
