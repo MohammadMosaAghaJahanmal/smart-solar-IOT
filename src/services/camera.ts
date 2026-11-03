@@ -4,6 +4,8 @@ import type {
   MediaType,
   SystemSupport,
   CameraDevice,
+  OverlayStatus,
+  ReplacementMode,
 } from '../types/camera';
 export const camera = {
   async cameras(): Promise<CameraDevice[]> {
@@ -23,6 +25,7 @@ export const camera = {
   },
   activate: () => NativeVirtualCamera.activate(),
   deactivate: () => NativeVirtualCamera.deactivate(),
+  clear: () => NativeVirtualCamera.clearMedia(),
   loop: (enabled: boolean) => NativeVirtualCamera.setLoop(enabled),
   resolution: (width: number, height: number) =>
     NativeVirtualCamera.setResolution(width, height),
@@ -30,4 +33,15 @@ export const camera = {
     NativeVirtualCamera.setOutput(rotation, scale, id),
   transform: (zoom: number, panX: number, panY: number) =>
     NativeVirtualCamera.setSourceTransform(zoom, panX, panY),
+  replacementMode: (mode: ReplacementMode) =>
+    NativeVirtualCamera.setReplacementMode(mode),
+  async overlayStatus(): Promise<OverlayStatus> {
+    return JSON.parse(await NativeVirtualCamera.getOverlayStatus());
+  },
+  async requestOverlayPermission(): Promise<OverlayStatus> {
+    return JSON.parse(await NativeVirtualCamera.requestOverlayPermission());
+  },
+  async overlayVisible(visible: boolean): Promise<OverlayStatus> {
+    return JSON.parse(await NativeVirtualCamera.setOverlayVisible(visible));
+  },
 };

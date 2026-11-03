@@ -9,6 +9,7 @@ import android.util.Log
 class GuestBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action !in setOf(Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED)) return
+        if (!runCatching { context.getSharedPreferences("virtual-camera-unified-setup-v1",Context.MODE_PRIVATE).getBoolean("autoRecover",true) }.getOrDefault(false)) return
         val pending = goAsync()
         Thread {
             try {

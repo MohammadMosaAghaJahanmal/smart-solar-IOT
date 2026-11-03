@@ -12,8 +12,21 @@ export interface Spec extends TurboModule {
     cameraId: string,
   ): Promise<void>;
   setSourceTransform(zoom: number, panX: number, panY: number): Promise<void>;
+  setReplacementMode(mode: string): Promise<void>;
+  getOverlayStatus(): Promise<string>;
+  requestOverlayPermission(): Promise<string>;
+  setOverlayVisible(visible: boolean): Promise<string>;
   getStatus(): Promise<string>;
   getCameras(): Promise<string>;
   checkSystemSupport(): Promise<string>;
+  getSetupStatus(): Promise<string>;
+  runSetup(action: string, approved: boolean): Promise<string>;
+  requestSetupPermissions(): Promise<string>;
+  clearMedia(): Promise<void>;
+  setRecoveryPreferences(
+    autoRecover: boolean,
+    autoResume: boolean,
+  ): Promise<void>;
+  exportDiagnostics(): Promise<string>;
 }
 export default TurboModuleRegistry.getEnforcing<Spec>('VirtualCamera');

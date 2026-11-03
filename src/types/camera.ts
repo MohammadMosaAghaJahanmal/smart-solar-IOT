@@ -1,4 +1,11 @@
 export type MediaType = 'image' | 'video';
+export type ReplacementMode = 'single' | 'both';
+export interface OverlayStatus {
+  supported: boolean;
+  permissionGranted: boolean;
+  visible: boolean;
+  message?: string;
+}
 export interface SourceTransform {
   zoom: number;
   panX: number;
@@ -26,6 +33,8 @@ export interface CameraStatus {
   panX?: number;
   panY?: number;
   cameraId: string;
+  replacementMode?: ReplacementMode;
+  cameraIds?: string[];
   virtualId?: string;
   frames?: number;
   streams?: number;
@@ -40,6 +49,8 @@ export interface CameraStatus {
     backend?: string;
     sourceVerified?: boolean;
     sourceSha256?: string;
+    replacementMode?: ReplacementMode;
+    cameraIds?: string[];
   };
 }
 export interface SystemSupport {
@@ -50,6 +61,9 @@ export interface SystemSupport {
   component?: string;
   recovery?: string;
   backend?: string;
+  replacementModes?: ReplacementMode[];
+  bothCameraIds?: string[];
+  bothResolutions?: { width: number; height: number }[];
   resolutions?: { width: number; height: number }[];
   device?: {
     androidSdk: number;
@@ -76,4 +90,5 @@ export interface CameraDevice {
   facing: 'front' | 'back' | 'external';
   hardwareLevel?: number;
   sensorOrientation?: number;
+  resolutions?: { width: number; height: number }[];
 }

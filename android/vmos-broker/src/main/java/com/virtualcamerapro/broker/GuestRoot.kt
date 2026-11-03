@@ -13,7 +13,10 @@ internal class GuestRoot(context: Context) {
     private fun runFixed(command: String, timeoutSeconds: Long = 6): String {
         runtime.requireGuest()
         val script = "[ \"$(/system/bin/id -u)\" = 0 ] || exit 73\n$command"
-        val process = try { ProcessBuilder("/system/xbin/su", "-c", script).redirectErrorStream(true).start() }
+        val executable = listOf("/system/xbin/su", "/system/bin/su", "/sbin/su", "/su/bin/su", "/system/bin/.ext/.su")
+            .firstOrNull { File(it).isFile && File(it).canExecute() }
+            ?: throw unavailable("No executable guest root implementation is available")
+        val process = try { ProcessBuilder(executable, "-c", script).redirectErrorStream(true).start() }
         catch (error: Exception) { throw unavailable(error.message ?: "The guest su executable could not be started") }
         val output = StringBuilder()
         val reader = Thread {
@@ -52,8 +55,8 @@ internal class GuestRoot(context: Context) {
         // VMOS executes this inspected guest binary through its own linker. The
         // kernel's /proc/exe therefore identifies the launcher, not the provider.
         val direct = fields["VCAM_EXE"] == EXECUTABLE && fields["VCAM_EXE_SHA"] == PROVIDER_SHA
-        val virtualized = fields["VCAM_EXE"]?.matches(Regex("/data/app/com\\.vmos\\.virtual-[A-Za-z0-9_=+-]+/lib/arm64/libylinker64\\.so")) == true &&
-            fields["VCAM_EXE_SHA"] == VMOS_LINKER_SHA
+        val virtualized = VmosHostIdentity.isPinnedLauncher(fields["VCAM_EXE"].orEmpty(), fields["VCAM_EXE_SHA"].orEmpty(),
+            fromProcExe = true)
         if ((!direct && !virtualized) || fields["VCAM_CMD"] != EXECUTABLE ||
             fields["VCAM_BINARY_SHA"] != PROVIDER_SHA || fields["VCAM_SERVICE"] != "running")
             throw GuestFailure("VMOS_PROVIDER_RESTART_UNVERIFIED", "The guest provider process or init-service identity does not match the measured restart target",
@@ -89,6 +92,5 @@ internal class GuestRoot(context: Context) {
         private const val BASENAME = "android.hardware.camera.provider@2.4-service"
         private const val EXECUTABLE = "/vendor/bin/hw/$BASENAME"
         private const val PROVIDER_SHA = "fe58ac53d066187a0fd499a38354101ccff9cc0d3379164bd9f36b5b631d7e87"
-        private const val VMOS_LINKER_SHA = "d3806cf0d56869b4fed7f0f8674498d4e6d4e2e7011903ce3380a21e6c1168a4"
     }
 }

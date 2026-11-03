@@ -4,7 +4,33 @@ Android React Native controller, native media frame engine, and camera backends
 for an inspected VMOS guest, a local Android Emulator environment camera, and a
 controlled AOSP 16 CameraService integration.
 
-**The app is installed and verified inside VMOS on the connected Infinix X687B.**
+The VMOS controller and guest broker now ship in **one APK**, with conditional
+setup, approved automatic guest preparation, actual camera verification,
+restore and recovery. [Download VirtualCameraPro.apk](artifacts/VirtualCameraPro.apk).
+Version 2.2 adds adaptive setup and measured multi-lens routing. On the Samsung
+SM-N986U / Android 13 host, all four VMOS guest cameras passed image/video
+replacement, floating gestures, live transforms without reopening the camera,
+independent camera crop requests, color checks and crash recovery. Setup and
+permissions survived a VMOS shutdown/start without another setup approval.
+See [device portability and acceptance](docs/DEVICE_PORTABILITY.md).
+The accepted Infinix 2.1 APK and its [measurements](docs/CAMERA_MODES_ACCEPTANCE.md)
+remain preserved; this 2.2 build has not been retested on that phone.
+
+Read [installation and requirements](docs/UNIFIED_INSTALLATION.md) and the
+[device acceptance report](docs/DEVICE_PORTABILITY.md). This non-debuggable
+Release APK uses development signing with ancestry from this guest's public
+platform test key; it is not a production trust configuration. Android 10–16
+host compatibility remains conditional on the VMOS guest and actual device
+tests; these results do not establish universal compatibility.
+
+The delivered app includes **Front Camera Only**, **Back Camera Only** and
+**Replace Both Cameras**, plus optional floating zoom/pan/reset controls inside
+VMOS. Deactivate before changing replacement mode; both-camera mode shares one
+playback timeline when another app switches lenses. See
+[camera modes and controls](docs/CAMERA_MODES_AND_CONTROLS.md) for the guest
+overlay-permission steps and the verification status of these additions.
+
+**Earlier two-app regression baseline:**
 Open **Virtual Camera Pro inside VMOS**, select an image or video and press
 **Activate**. Run camera-consuming apps inside that same VMOS guest. Back/front
 720p, back 1080p, image switching, looping video, real YUV/JPEG capture and
@@ -29,10 +55,11 @@ matching crop metadata. See [crop acceptance](artifacts/vmos/crop-acceptance.jso
 An app must send standard camera crop requests; a gesture used for focus does
 not become panning automatically.
 
-The final controller, broker and helper APKs were installed with matching device
+The earlier baseline controller, broker and helper APKs were installed with matching device
 hashes and retested after a full guest restart. Crop controls passed again, and
 the user's portrait produced normal stock-camera confirmation and saved JPEG
-colors. The phone was left with that portrait active on the guest front camera.
+colors. At that baseline acceptance, the phone was left with that portrait active
+on the guest front camera. The new one-APK acceptance is recorded separately above.
 See [installed build verification](artifacts/vmos/final-installed-device-identity.json).
 
 VMOS alpha13 has a startup setting issue: visit its host **Settings** screen
@@ -80,12 +107,12 @@ Eight Android modules are included:
 
 | Module | Purpose |
 | --- | --- |
-| `app` | Gallery picker, native image/video preview, settings, TurboModule and Binder client |
+| `app` | Gallery picker, native image/video preview, conditional setup, integrated private VMOS broker and trusted external-backend client |
 | `broker` | Compile check of the privileged service against the SDK and pinned AIDL; install the Soong/platform-signed build through the system image |
 | `emulator-broker` | Separate platform APK for the explicitly configured local Android Emulator environment camera and companion |
 | `camera-client` | Independent Camera2 and CameraX preview/JPEG consumer and instrumentation tests |
 | `system-tests` | SDK compile check for the separate, platform-signed AOSP acceptance APK; exercises actual image/video output, restoration and the original Camera app |
-| `vmos-broker` | Exact-profile Android 9 ARM64 VMOS camera transport, guarded setup, verified activation and guest recovery |
+| `vmos-broker` | Shared exact-profile Android 9 ARM64 VMOS runtime; its separate legacy APK remains buildable for migration/regression |
 | `guest-tools` | Explicit guest identity, staging and native transport diagnostics |
 | `vmos-bridge` | Development-key-signed helper that enables ADB only inside the inspected VMOS guest |
 
@@ -99,6 +126,24 @@ and runs without Metro. It also uses the development signing certificate. The
 regular debug variant uses Metro for development.
 The standalone variant deliberately retains the debug native ABI to match its
 React Android dependency; React Native developer support is disabled separately.
+The delivered APK instead uses the true Release React Android/Hermes dependencies
+and is non-debuggable. Its build log is
+[release16-build.log](artifacts/unified/release16-build.log). Build and instrument
+that variant with:
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleRelease
+.\gradlew.bat :app:assembleReleaseAndroidTest -PcameraTestBuildType=release
+```
+
+On this PC, verified official Release AARs are also available through the
+[exact-version local repository helper](artifacts/unified/release-dependencies/local-release-repository.init.gradle)
+used by that build. The development root-authorization signing step is described
+in [VMOS_DEVELOPMENT_ROOT_AUTHORIZATION.md](docs/VMOS_DEVELOPMENT_ROOT_AUTHORIZATION.md).
+Ordinary users install the delivered single APK; they do not build or install the
+test/diagnostic applications.
+
 The controller is packaged for ARM64 and x86_64, with a minimum of Android 9
 (API 28). These installation requirements do not establish a compatible system
 camera backend on every Android version.

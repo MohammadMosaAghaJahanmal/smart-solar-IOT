@@ -28,7 +28,8 @@ class VmosCropFixtureActivationTest {
             val width = args.getString("width", "1280").toInt()
             controller.update(OutputSettings(cameraId = args.getString("cameraId", "1"), width = width,
                 height = if (width == 1920) 1080 else 720,
-                rotation = args.getString("rotation", "0").toInt(), scaleMode = args.getString("scaleMode", "fill")))
+                rotation = args.getString("rotation", "0").toInt(), scaleMode = args.getString("scaleMode", "fill"),
+                replacementMode = args.getString("replacementMode", "single")))
             controller.select(Uri.fromFile(fixture).toString(), args.getString("sourceType", "image"))
             args.getString("displayName")?.let { controller.state.name = it }
             assertTrue(controller.activate())

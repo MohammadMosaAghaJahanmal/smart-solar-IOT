@@ -48,14 +48,21 @@ class VmosLiveTransformTest {
         context.startActivity(requireNotNull(context.packageManager.getLaunchIntentForPackage(context.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         instrumentation.waitForIdleSync()
         val id = args.getString("cameraId", "0")
+        val mode = args.getString("replacementMode", "single")
+        val sourceType = args.getString("sourceType", "image")
+        require(sourceType in setOf("image", "video"))
         val directory = File(context.getExternalFilesDir(null), "vmos-live-transform").apply { mkdirs() }
-        val report = JSONObject().put("passed", false).put("cameraId", id).put("controllerUid", Process.myUid())
+        val report = JSONObject().put("passed", false).put("cameraId", id).put("controllerUid", Process.myUid()).put("replacementMode",mode).put("sourceType",sourceType)
         val observations = JSONArray(); report.put("observations", observations)
         fun save() = File(directory, "live-transform.json").writeText(report.toString(2))
-        val source = File(context.cacheDir, "live-transform-quadrants.png")
+        val source = File(context.cacheDir, if (sourceType == "video") "live-transform-quadrants.mp4" else "live-transform-quadrants.png")
+        if (sourceType == "video") {
+            instrumentation.context.assets.open("quadrants-2s.mp4").use { input -> source.outputStream().use { input.copyTo(it) } }
+        } else {
         val bitmap = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888)
         for (y in 0 until 180) for (x in 0 until 320) bitmap.setPixel(x, y, if (y < 90) { if (x < 160) Color.RED else Color.GREEN } else { if (x < 160) Color.BLUE else Color.WHITE })
         source.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
+        }
         val worker = HandlerThread("HeldOpenTransformConsumer").apply { start() }
         val handler = Handler(worker.looper)
         val reader = ImageReader.newInstance(1280, 720, ImageFormat.YUV_420_888, 3)
@@ -84,8 +91,8 @@ class VmosLiveTransformTest {
             try {
                 val support = controller.support(); report.put("support", support); save()
                 assertTrue("The configured guest bridge must be ready: $support", support.getBoolean("supported"))
-                controller.deactivate(); controller.update(OutputSettings(cameraId = id, scaleMode = "fill"))
-                controller.select(Uri.fromFile(source).toString(), "image"); assertTrue(controller.activate())
+                controller.deactivate(); controller.update(OutputSettings(cameraId = id, scaleMode = "fill", replacementMode = mode))
+                controller.select(Uri.fromFile(source).toString(), sourceType); assertTrue(controller.activate())
                 val original = controller.status().getJSONObject("proof")
                 val generation = original.getString("generation")
                 val proxyPid = original.getInt("proxyPid")
@@ -107,10 +114,10 @@ class VmosLiveTransformTest {
                 assertTrue(ready.await(10, TimeUnit.SECONDS)); failure.get()?.let { throw it }
                 requireNotNull(frames.poll(5, TimeUnit.SECONDS)) { "The held-open camera delivered no actual buffers" }
                 var lastTimestamp = 0L; var lastSequence = -1L
-                for ((expected, value) in listOf(Color.RED to OutputSettings(cameraId = id, scaleMode = "fill", zoom = 2.0, panX = 1.0, panY = 1.0),
-                    Color.GREEN to OutputSettings(cameraId = id, scaleMode = "fill", zoom = 2.0, panX = -1.0, panY = 1.0),
-                    Color.BLUE to OutputSettings(cameraId = id, scaleMode = "fill", zoom = 2.0, panX = 1.0, panY = -1.0),
-                    Color.WHITE to OutputSettings(cameraId = id, scaleMode = "fill", zoom = 2.0, panX = -1.0, panY = -1.0))) {
+                for ((expected, value) in listOf(Color.RED to OutputSettings(cameraId = id, scaleMode = "fill", zoom = 2.0, panX = 1.0, panY = 1.0, replacementMode = mode),
+                    Color.GREEN to OutputSettings(cameraId = id, scaleMode = "fill", zoom = 2.0, panX = -1.0, panY = 1.0, replacementMode = mode),
+                    Color.BLUE to OutputSettings(cameraId = id, scaleMode = "fill", zoom = 2.0, panX = 1.0, panY = -1.0, replacementMode = mode),
+                    Color.WHITE to OutputSettings(cameraId = id, scaleMode = "fill", zoom = 2.0, panX = -1.0, panY = -1.0, replacementMode = mode))) {
                     frames.clear()
                     val started = SystemClock.elapsedRealtime(); controller.update(value)
                     val timeout = SystemClock.elapsedRealtime() + 4000

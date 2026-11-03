@@ -5,7 +5,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Describes the controller's host, not a successful camera integration.
+ * Describes the Android environment visible to the controller, not the physical
+ * host when the controller is installed inside a VM.
  * A matching Android API level must never be treated as delivery evidence.
  */
 data class DeviceCompatibility(
@@ -26,11 +27,23 @@ data class DeviceCompatibility(
         .put("controllerMinSdk", CONTROLLER_MIN_SDK)
         .put("controllerAbis", JSONArray(CONTROLLER_ABIS))
         .put("controllerInstallCompatible", controllerInstallCompatible)
+        .put("deviceIdentityScope", "current_android_environment; a guest may mask the physical host")
         .put("referenceBackendSdk", REFERENCE_BACKEND_SDK)
         .put("referenceBackendApiMatches", sdk == REFERENCE_BACKEND_SDK)
 
     /** Static evidence scopes; only the broker's live support/proof can mark a route ready. */
     fun backendSupport() = JSONArray()
+        .put(JSONObject()
+            .put("backend", "integrated_vmos")
+            .put("verification", "verified_inside_one_configured_vmos_guest")
+            .put("androidSdks", JSONArray(listOf(28)))
+            .put("architectures", JSONArray(listOf("arm64-v8a")))
+            .put("verifiedPhysicalHostAndroidSdks", JSONArray(listOf(29)))
+            .put("physicalDeviceVerified", true)
+            .put("otherPhysicalHostsVerified", false)
+            .put("directStockCameraReplacement", false)
+            .put("requiresMeasuredGuestProfile", true)
+            .put("requiresLiveFrameVerification", true))
         .put(JSONObject()
             .put("backend", "android_emulator_environment")
             .put("verification", "verified_on_configured_pc_emulator")
@@ -48,15 +61,10 @@ data class DeviceCompatibility(
         val deviceName = listOf(manufacturer, model).filter { it.isNotBlank() }
             .joinToString(" ").ifBlank { "This device" }
         val androidName = "Android $release (API $sdk)"
-        val recovery = if (sdk < REFERENCE_BACKEND_SDK) {
-            "The controller can run here, but the supplied system broker requires Android 16 (API 36). " +
-                "$androidName needs a camera provider and CameraService integration built for this device's firmware. " +
-                "Installing either APK alone cannot replace its system cameras."
-        } else {
-            "This device needs a platform-signed broker, a compatible camera provider and CameraService routing integration in its firmware. " +
-                "The PC emulator backend only supports the configured Android emulator. " +
-                "Installing a broker APK alone cannot add camera routing to a stock OS."
-        }
+        val recovery = "Inside VMOS, install this same APK in the guest and use its setup assistant to inspect the actual guest profile, " +
+            "permissions, root access and camera transport. The integrated guest service does not need a second broker APK. " +
+            "On a stock physical Android OS, system-wide replacement needs a camera-provider and CameraService integration built for its firmware; " +
+            "installing an APK alone cannot add that routing. Android version compatibility alone does not establish a working camera bridge."
         return JSONObject()
             .put("supported", false)
             .put("protocol", 2)

@@ -191,7 +191,7 @@ class ProxyTests(unittest.TestCase):
             self.assertEqual(result, b"OK" if expect else b"")
         return epoch
 
-    def configure_quadrants(self, format="RGBA", name="quadrants", live=False, sequence=0):
+    def configure_quadrants(self, format="RGBA", name="quadrants", live=False, sequence=0, routes=None):
         raw = self.state / f"{name}-{sequence % 2}.raw"
         colors = [(255, 0, 0, 255), (0, 255, 0, 255), (0, 0, 255, 255), (255, 255, 0, 255)]
         if format == "RGBA":
@@ -206,13 +206,105 @@ class ProxyTests(unittest.TestCase):
         temporary.write_bytes(data)
         temporary.replace(raw)
         expires = time.clock_gettime_ns(time.CLOCK_BOOTTIME) + int(5e9)
-        config = (f"{'VCAM2' if live else 'VCAM1'}\nid={name}\ncamera_name=camera_0\npath={raw}\nformat={format}\n"
+        config = (f"{'VCAM3' if routes is not None else 'VCAM2' if live else 'VCAM1'}\nid={name}\ncamera_name=camera_0\npath={raw}\nformat={format}\n"
                   f"width=8\nheight=8\nfps=30\nframes=1\nloop=1\nsha256={'a' * 64}\nexpires_ns={expires}\n")
         if live:
             config += f"sequence={sequence}\n"
+        if routes is not None:
+            config += f"camera_names={','.join(routes)}\n"
         temporary = self.state / "config.next"
         temporary.write_text(config)
         temporary.replace(self.state / "source.cfg")
+
+    def configure_frame(self, width, height, data, format="RGBA", name="aspect-frame"):
+        raw = self.state / f"{name}.raw"
+        raw.write_bytes(data)
+        expires = time.clock_gettime_ns(time.CLOCK_BOOTTIME) + int(30e9)
+        config = (f"VCAM1\nid={name}\ncamera_name=camera_0\npath={raw}\nformat={format}\n"
+                  f"width={width}\nheight={height}\nfps=30\nframes=1\nloop=1\n"
+                  f"sha256={'a' * 64}\nexpires_ns={expires}\n")
+        temporary = self.state / "source.next"
+        temporary.write_text(config)
+        temporary.replace(self.state / "source.cfg")
+
+    def test_full_sensor_aspect_window_preserves_complete_rgba_media(self):
+        width, height = 1280, 720
+        rows = []
+        for colors in (((255, 0, 0, 255), (0, 255, 0, 255)),
+                       ((0, 0, 255, 255), (255, 255, 255, 255))):
+            row = bytearray(bytes(colors[0]) * (width // 2) + bytes(colors[1]) * (width // 2))
+            for center in (width // 4, width * 3 // 4):
+                left, right = center - width // 48, center + width // 48
+                row[left * 4:right * 4] = bytes((0, 0, 0, 255)) * (right - left)
+            rows.append(bytes(row))
+        gray = bytes((128, 128, 128, 255)) * width
+        data = b"".join(gray if any(abs(y - center) < height // 48 for center in (height // 4, height * 3 // 4))
+                        else rows[y * 2 // height] for y in range(height))
+        self.query(f"start dim={width}x{height} pix=825382478")
+        self.configure_frame(width, height, data)
+        # The same full selected image must survive both measured sensor shapes;
+        # quadrant boundaries alone would hide the erroneous second aspect zoom.
+        for active_width, active_height in ((1920, 1440), (1920, 1088)):
+            with self.subTest(active_array=(active_width, active_height)):
+                self.crop(width=active_width, height=active_height,
+                          active_width=active_width, active_height=active_height)
+                self.assertEqual(self.query(f"frame video=0 preview={len(data)} time=1"),
+                                 b"ok:" + data + self.original.timestamp)
+
+    def test_full_sensor_aspect_window_preserves_complete_i420_planes(self):
+        width, height = 1280, 720
+        y = b"".join(bytes((16 + row * 210 // (height - 1),)) * width for row in range(height))
+        u = bytes(64 + column * 80 // (width // 2 - 1) for column in range(width // 2)) * (height // 2)
+        v = b"".join(bytes((96 + row * 80 // (height // 2 - 1),)) * (width // 2) for row in range(height // 2))
+        data = y + u + v
+        self.query(f"start dim={width}x{height} pix=842093913")
+        self.configure_frame(width, height, data, format="I420")
+        for active_width, active_height in ((1920, 1440), (1920, 1088)):
+            with self.subTest(active_array=(active_width, active_height)):
+                self.crop(width=active_width, height=active_height,
+                          active_width=active_width, active_height=active_height)
+                self.assertEqual(self.query(f"frame video={len(data)} preview=0 time=1"),
+                                 b"ok:" + data + self.original.timestamp)
+
+    def test_sensor_zoom_pan_and_tall_crop_are_relative_to_full_stream_window(self):
+        width, height = 32, 18
+        # A 1920x1440 sensor's neutral 16:9 window is (0,180,1920,1080).
+        # These expected raw coordinates are relative to that window, including
+        # legal off-center requests which extend outside its top/bottom edges.
+        steps = (
+            ("center-2x", (480, 360, 960, 720), lambda x: 8 + x // 2, lambda y: (9 + y) // 2),
+            ("top-left-2x", (0, 0, 960, 720), lambda x: x // 2, lambda y: max(0, (y - 3) // 2)),
+            ("bottom-right-2x", (960, 720, 960, 720), lambda x: 16 + x // 2, lambda y: min(17, (21 + y) // 2)),
+            ("tall-center", (480, 0, 960, 1440), lambda x: 8 + x // 2, lambda y: (9 + y) // 2),
+            ("restored-full", (0, 0, 1920, 1440), lambda x: x, lambda y: y),
+        )
+        for format in ("RGBA", "I420"):
+            if format == "RGBA":
+                data = b"".join(bytes((x * 6, y * 12, 40, 255)) for y in range(height) for x in range(width))
+                self.query(f"start dim={width}x{height} pix=825382478")
+            else:
+                data = (bytes(16 + x + y * 8 for y in range(height) for x in range(width))
+                        + bytes(64 + x + y * 2 for y in range(height // 2) for x in range(width // 2))
+                        + bytes(160 + x + y * 2 for y in range(height // 2) for x in range(width // 2)))
+                self.query(f"start dim={width}x{height} pix=842093913")
+            self.configure_frame(width, height, data, format=format, name=f"sensor-window-{format}")
+            epoch = self.crop(width=1920, height=1440, active_width=1920, active_height=1440)
+            for serial, (label, rect, source_x, source_y) in enumerate(steps, 2):
+                with self.subTest(format=format, crop=label):
+                    left, top, crop_width, crop_height = rect
+                    self.crop(left=left, top=top, width=crop_width, height=crop_height,
+                              active_width=1920, active_height=1440, epoch=epoch, serial=serial)
+                    if format == "RGBA":
+                        expected = b"".join(bytes((source_x(x) * 6, source_y(y) * 12, 40, 255))
+                                            for y in range(height) for x in range(width))
+                        command = f"frame video=0 preview={len(expected)} time=1"
+                    else:
+                        expected = bytes(data[source_y(y) * width + source_x(x)] for y in range(height) for x in range(width))
+                        for offset in (width * height, width * height * 5 // 4):
+                            expected += bytes(data[offset + (source_y(y * 2) // 2) * (width // 2) + source_x(x * 2) // 2]
+                                              for y in range(height // 2) for x in range(width // 2))
+                        command = f"frame video={len(expected)} preview=0 time=1"
+                    self.assertEqual(self.query(command), b"ok:" + expected + self.original.timestamp)
 
     def test_app_crop_changes_actual_rgba_pixels_and_full_reset_on_existing_stream(self):
         self.start()
@@ -334,19 +426,91 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.original.commands, [])
 
-    def configure_live(self, sequence=0, color=(255, 0, 0, 255), raw_sequence=None, name="live-1"):
+    def configure_live(self, sequence=0, color=(255, 0, 0, 255), raw_sequence=None, name="live-1", routes=None):
         raw = self.state / f"{name}-{sequence % 2}.raw"
         temporary = self.state / "frame.next"
         temporary.write_bytes(b"VCAMFR2\n" + struct.pack(">Q", sequence if raw_sequence is None else raw_sequence) + bytes(color) * 4)
         temporary.replace(raw)
         expires = time.clock_gettime_ns(time.CLOCK_BOOTTIME) + int(2 * 1e9)
-        text = (f"VCAM2\nid={name}\ncamera_name=camera_0\npath={raw}\nformat=RGBA\n"
+        text = (f"{'VCAM3' if routes is not None else 'VCAM2'}\nid={name}\ncamera_name=camera_0\npath={raw}\nformat=RGBA\n"
                 f"width=2\nheight=2\nfps=30\nframes=1\nloop=1\nsequence={sequence}\n"
                 f"sha256={'a' * 64}\nexpires_ns={expires}\n")
+        if routes is not None:
+            text += f"camera_names={','.join(routes)}\n"
         temporary = self.state / "source.next"
         temporary.write_text(text)
         temporary.replace(self.state / "source.cfg")
         return raw
+
+    def connect_camera(self, name):
+        connection = socket.socket(socket.AF_UNIX)
+        connection.settimeout(5)
+        connection.connect(str(self.proxy_socket))
+        connection.sendall(f"pipe:qemud:camera:name={name}\0".encode())
+        self.assertEqual(read_exact(connection, 2), b"OK")
+        return connection
+
+    def query_connection(self, connection, command):
+        connection.sendall(command.encode() + b"\0")
+        header = read_exact(connection, 8)
+        return read_exact(connection, int(header.split(b"\0", 1)[0], 16))
+
+    def test_both_routes_share_live_generation_and_ring_across_camera_switches(self):
+        self.start()
+        with self.connect_camera("camera_1") as front, self.connect_camera("unselected_sensor") as other:
+            for connection in (front, other):
+                self.assertEqual(self.query_connection(connection, "start dim=2x2 pix=825382478"), b"ok\0")
+            for sequence in range(8):
+                color = (255, 0, 0, 255) if sequence % 2 == 0 else (0, 0, 255, 255)
+                self.configure_live(sequence, color, routes=("camera_0", "camera_1"))
+                expected = bytes([82] * 4 + [240, 90]) if sequence % 2 == 0 else bytes([41] * 4 + [110, 240])
+                for connection in (self.connection, front, self.connection, front):
+                    self.assertEqual(self.query_connection(connection, "frame video=6 preview=0 time=1"), b"ok:" + expected + self.original.timestamp)
+                self.assertEqual(self.query_connection(other, "frame video=6 preview=0 time=1")[3:9], bytes(range(6)))
+            time.sleep(.21)
+            self.query_connection(front, "frame video=6 preview=0 time=1")
+            deadline = time.monotonic() + 1
+            while True:
+                status = json.loads((self.state / "status.json").read_text())
+                if status["sourceFrames"] == 33 or time.monotonic() >= deadline:
+                    break
+                time.sleep(.01)
+            self.assertEqual(status["sourceId"], "live-1")
+            self.assertEqual(status["sequence"], 7)
+            self.assertEqual(status["cameraNames"], ["camera_0", "camera_1"])
+            self.assertEqual(status["cameraFrames"], {"camera_0": 16, "camera_1": 17})
+            self.assertEqual(status["sourceFrames"], 33)
+            self.assertEqual(len(list(self.state.glob("*.raw"))), 2)
+
+    def test_both_routes_keep_independent_standard_crops_across_live_frames(self):
+        self.start()
+        with self.connect_camera("camera_1") as front:
+            self.query_connection(front, "start dim=2x2 pix=825382478")
+            self.configure_quadrants(live=True, routes=("camera_0", "camera_1"))
+            back_epoch = self.crop(left=0, top=0, width=4, height=4)
+            self.crop(camera="camera_1", left=4, top=4, width=4, height=4)
+            for sequence in range(4):
+                self.configure_quadrants(live=True, sequence=sequence, routes=("camera_0", "camera_1"))
+                self.assertEqual(self.query("frame video=0 preview=16 time=1")[3:19], bytes([255, 0, 0, 255]) * 4)
+                self.assertEqual(self.query_connection(front, "frame video=0 preview=16 time=1")[3:19], bytes([255, 255, 0, 255]) * 4)
+            self.crop(epoch=back_epoch, serial=2)
+            self.assertEqual(self.query_connection(front, "frame video=0 preview=16 time=1")[3:19], bytes([255, 255, 0, 255]) * 4)
+            self.assertNotEqual(self.query("frame video=0 preview=16 time=1")[3:19], bytes([255, 0, 0, 255]) * 4)
+
+    def test_both_routes_reject_duplicate_missing_primary_and_malformed_names(self):
+        self.start()
+        for routes in (("camera_0",), ("camera_0", "camera_0"), ("camera_1", "camera_2"),
+                       ("camera_0", "../camera_1"), ("camera_0", ""), ("", "camera_0")):
+            with self.subTest(routes=routes):
+                self.configure_live(routes=routes)
+                self.assertEqual(self.query("frame video=6 preview=0 time=1")[3:9], bytes(range(6)))
+
+    def test_both_routes_cannot_change_within_a_live_generation(self):
+        self.start()
+        self.configure_live(routes=("camera_0", "camera_1"))
+        self.assertEqual(self.query("frame video=6 preview=0 time=1")[3:9], bytes([82] * 4 + [240, 90]))
+        self.configure_live(sequence=1, routes=("camera_0", "camera_2"))
+        self.assertEqual(self.query("frame video=6 preview=0 time=1")[3:9], bytes(range(6)))
 
     def test_transparent_factory_unknown_and_frames(self):
         self.assertEqual(self.query("list"), b"ok:name=camera_0 framedims=2x2 dir=back\n")
@@ -386,6 +550,45 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(self.query("frame video=6 preview=0 time=1")[3:9], bytes(range(6)))
         self.configure_live(9, raw_sequence=11)
         self.assertEqual(self.query("frame video=6 preview=0 time=1")[3:9], bytes(range(6)))
+
+    def test_atomic_config_publication_keeps_generation_delivery_accounting(self):
+        self.start()
+        self.configure_live(0)
+        config = self.state / "source.cfg"
+        config.chmod(0o600)
+        data = config.read_bytes()
+        stopped = threading.Event()
+        def publish():
+            temporary = self.state / "config-publication.next"
+            while not stopped.is_set():
+                temporary.write_bytes(data)
+                temporary.chmod(0o600)
+                temporary.replace(config)
+        worker = threading.Thread(target=publish)
+        worker.start()
+        delivered = 0
+        try:
+            for _ in range(1000):
+                response = self.query("frame video=6 preview=0 time=1")
+                if response[3:9] == bytes([82] * 4 + [240, 90]):
+                    delivered += 1
+                else:
+                    self.assertEqual(response[3:9], bytes(range(6)))
+        finally:
+            stopped.set()
+            worker.join(2)
+        time.sleep(.21)
+        self.assertEqual(self.query("frame video=6 preview=0 time=1")[3:9], bytes([82] * 4 + [240, 90]))
+        deadline = time.monotonic() + 1
+        while True:
+            status = json.loads((self.state / "status.json").read_text())
+            if status["sourceFrames"] == delivered + 1 or time.monotonic() >= deadline:
+                break
+            time.sleep(.01)
+        self.assertGreater(delivered, 900)
+        self.log.flush()
+        self.log.seek(0)
+        self.assertEqual(status["sourceFrames"], delivered + 1, self.log.read()[-3000:])
 
     def test_live_ring_same_sequence_does_not_map_replaced_inode(self):
         self.start()

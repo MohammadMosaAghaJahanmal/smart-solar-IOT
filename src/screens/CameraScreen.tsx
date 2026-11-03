@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MediaPreview } from '../components/MediaPreview';
 import { useCamera } from '../hooks/useCamera';
 import { camera } from '../services/camera';
+import type { SetupStatus } from '../types/setup';
 const titles = {
   ready: 'Virtual Camera Ready',
   activating: 'Activating…',
@@ -25,11 +26,13 @@ function Choice({
   label,
   selected,
   disabled,
+  sizeToContent,
   onPress,
 }: {
   label: string;
   selected?: boolean;
   disabled?: boolean;
+  sizeToContent?: boolean;
   onPress: () => void;
 }) {
   return (
@@ -38,13 +41,31 @@ function Choice({
       accessibilityState={{ selected, disabled }}
       disabled={disabled}
       onPress={onPress}
-      style={[s.choice, selected && s.selected, disabled && s.disabled]}
+      style={[
+        s.choice,
+        sizeToContent && s.choiceContentWidth,
+        selected && s.selected,
+        disabled && s.disabled,
+      ]}
     >
-      <Text style={[s.choiceText, selected && s.selectedText]}>{label}</Text>
+      <Text
+        numberOfLines={sizeToContent ? 1 : undefined}
+        style={[s.choiceText, selected && s.selectedText]}
+      >
+        {label}
+      </Text>
     </Pressable>
   );
 }
-export function CameraScreen() {
+export function CameraScreen({
+  setupStatus,
+  onDiagnostics,
+  onSetup,
+}: {
+  setupStatus?: SetupStatus;
+  onDiagnostics?: () => void;
+  onSetup?: () => void;
+}) {
   const {
     status,
     support,
@@ -52,22 +73,54 @@ export function CameraScreen() {
     error,
     run,
     cameras,
+    overlay,
     activating,
+    cancelling,
+    cancelActivation,
     updateTransform,
   } = useCamera();
   const [adjustingSource, setAdjustingSource] = useState(false);
   const active = status?.phase === 'active';
+  const both = status?.replacementMode === 'both';
+  const cameraForFacing = (facing: 'front' | 'back') =>
+    cameras.find(
+      device => device.facing === facing && device.id === status?.cameraId,
+    ) ?? cameras.find(device => device.facing === facing);
+  const front = cameraForFacing('front');
+  const back = cameraForFacing('back');
+  const bothSupported =
+    support?.replacementModes?.includes('both') === true && !!front && !!back;
+  const bothRouteExists =
+    bothSupported &&
+    !!support?.bothCameraIds?.length &&
+    support.bothCameraIds.every(id => cameras.some(device => device.id === id));
   const selectedCameraExists = cameras.some(
     device => device.id === status?.cameraId,
   );
+  const selectedCamera = cameras.find(device => device.id === status?.cameraId);
+  const resolutions = both
+    ? support?.bothResolutions ?? []
+    : selectedCamera?.resolutions ?? support?.resolutions ?? [];
   const disabled =
     busy ||
-    (!active && (!status?.uri || !support?.supported || !selectedCameraExists));
+    (!active &&
+      (!status?.uri ||
+        !support?.supported ||
+        !(both ? bothRouteExists : selectedCameraExists)));
   const output = (
     rotation = status?.rotation ?? 0,
     scale = status?.scaleMode ?? 'fit',
-    id = status?.cameraId ?? '0',
+    id = status?.cameraId ?? cameras[0]?.id ?? '',
   ) => run(() => camera.output(rotation, scale, id));
+  const chooseCamera = (id: string) =>
+    run(async () => {
+      await camera.replacementMode('single');
+      await camera.output(
+        status?.rotation ?? 0,
+        status?.scaleMode ?? 'fit',
+        id,
+      );
+    });
   return (
     <SafeAreaView style={s.safe}>
       <StatusBar barStyle="light-content" backgroundColor="#0c121c" />
@@ -84,11 +137,30 @@ export function CameraScreen() {
           </View>
           <Text style={s.logo}>◉</Text>
         </View>
+        {!!setupStatus && (
+          <View style={s.card}>
+            <View style={s.setting}>
+              <Text style={s.label}>
+                Environment · {setupStatus.ready ? 'Ready' : setupStatus.title}
+              </Text>
+              {!!onDiagnostics && (
+                <Pressable accessibilityRole="button" onPress={onDiagnostics}>
+                  <Text style={s.selectedText}>Diagnose</Text>
+                </Pressable>
+              )}
+            </View>
+            <Text style={s.muted}>
+              {setupStatus.profile?.name ?? setupStatus.message}
+            </Text>
+          </View>
+        )}
         <View style={s.status}>
           <View style={[s.dot, active && s.dotActive]} />
           <View style={s.grow}>
             <Text style={s.statusTitle}>
-              {activating
+              {status?.stage?.includes('recover') && !active
+                ? 'Recovering camera…'
+                : activating
                 ? 'Activating…'
                 : status
                 ? titles[status.phase]
@@ -96,15 +168,13 @@ export function CameraScreen() {
             </Text>
             <Text style={s.muted}>
               {active
-                ? status?.backend === 'android_emulator_environment'
-                  ? `Camera ${status.cameraId} · Selected media is active`
-                  : `Camera ${status?.cameraId} → ${status?.virtualId} · ${
-                      status?.streams ?? 0
-                    } streams`
+                ? both
+                  ? 'Front and back cameras · Selected media is active'
+                  : `Camera ${status.cameraId} · Selected media is active`
                 : support?.message ?? 'Connecting to Android'}
             </Text>
           </View>
-          <Text style={s.badge}>{active ? 'VIRTUAL' : 'REAL'}</Text>
+          <Text style={s.badge}>{active ? 'ACTIVE' : 'INACTIVE'}</Text>
         </View>
         <Text style={s.section}>
           01 <Text style={s.sectionTitle}>Choose your source</Text>
@@ -153,9 +223,21 @@ export function CameraScreen() {
           </View>
         </View>
         {!!status?.uri && (
-          <Text numberOfLines={1} style={s.filename}>
-            {status.name}
-          </Text>
+          <View style={s.setting}>
+            <Text numberOfLines={1} style={[s.filename, s.grow]}>
+              {status.name}
+            </Text>
+            <Pressable
+              testID="camera-clear"
+              accessibilityLabel="Clear selection"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: busy }}
+              disabled={busy}
+              onPress={() => run(camera.clear)}
+            >
+              <Text style={s.selectedText}>Clear selection</Text>
+            </Pressable>
+          </View>
         )}
         <Text style={s.section}>
           02 <Text style={s.sectionTitle}>Camera output</Text>
@@ -164,38 +246,46 @@ export function CameraScreen() {
           <View style={s.setting}>
             <View>
               <Text style={s.label}>Output resolution</Text>
-              <Text style={s.muted}>30 frames per second</Text>
+              <Text style={s.muted}>
+                {both
+                  ? 'Verified sizes shared by both cameras'
+                  : 'Available for the selected camera'}
+              </Text>
             </View>
-            <Text style={s.detail}>16:9</Text>
+            <Text style={s.detail}>
+              {status ? `${status.width} × ${status.height}` : 'Checking…'}
+            </Text>
           </View>
-          <View style={s.row}>
-            {[
-              [1280, 720, '720p'],
-              [1920, 1080, '1080p'],
-            ].map(([w, h, label]) => (
+          <ScrollView
+            horizontal
+            accessibilityLabel="Available output resolutions"
+            style={s.resolutionScroll}
+            contentContainerStyle={s.resolutionChoices}
+            showsHorizontalScrollIndicator
+          >
+            {resolutions.map(({ width, height }) => (
               <Choice
-                key={label}
-                label={String(label)}
-                selected={status?.width === w}
-                disabled={
-                  busy ||
-                  active ||
-                  (support?.resolutions !== undefined &&
-                    !support.resolutions.some(
-                      size => size.width === w && size.height === h,
-                    ))
-                }
-                onPress={() =>
-                  run(() => camera.resolution(Number(w), Number(h)))
-                }
+                key={`${width}x${height}`}
+                label={`${width} × ${height}`}
+                sizeToContent
+                selected={status?.width === width && status?.height === height}
+                disabled={busy || active}
+                onPress={() => run(() => camera.resolution(width, height))}
               />
             ))}
-          </View>
+          </ScrollView>
+          {resolutions.length === 0 && (
+            <Text style={s.muted}>
+              {both
+                ? 'No shared output sizes have been verified for both cameras. Check Diagnostics.'
+                : 'No verified output sizes have been reported for this camera. Check Diagnostics.'}
+            </Text>
+          )}
           <View style={s.divider} />
           <View style={s.setting}>
             <View>
               <Text style={s.label}>Loop video</Text>
-              <Text style={s.muted}>Play continuously in the background</Text>
+              <Text style={s.muted}>Repeat the selected video</Text>
             </View>
             <Switch
               accessibilityLabel="Loop video"
@@ -232,25 +322,92 @@ export function CameraScreen() {
               />
             ))}
           </View>
-          <Text style={s.label}>Replace camera ID</Text>
+          <Text style={s.label}>Camera to replace</Text>
           <View style={s.row}>
-            {cameras.map(device => (
+            <Choice
+              label="Front Camera Only"
+              selected={!both && selectedCamera?.facing === 'front'}
+              disabled={busy || active || !front}
+              onPress={() => front && chooseCamera(front.id)}
+            />
+            <Choice
+              label="Back Camera Only"
+              selected={!both && selectedCamera?.facing === 'back'}
+              disabled={busy || active || !back}
+              onPress={() => back && chooseCamera(back.id)}
+            />
+          </View>
+          <Choice
+            label="Replace Both Cameras"
+            selected={both}
+            disabled={busy || active || !bothSupported}
+            onPress={() => run(() => camera.replacementMode('both'))}
+          />
+          {cameras
+            .filter(device => device.id !== front?.id && device.id !== back?.id)
+            .map(device => (
               <Choice
                 key={device.id}
                 label={`Camera ${device.id} · ${device.facing}`}
-                selected={status?.cameraId === device.id}
+                selected={!both && status?.cameraId === device.id}
                 disabled={busy || active}
-                onPress={() => output(undefined, undefined, device.id)}
+                onPress={() => chooseCamera(device.id)}
               />
             ))}
-          </View>
           <Text style={s.muted}>
-            {cameras.length === 0
-              ? 'Android has not reported any physical camera IDs.'
+            {active
+              ? 'Deactivate to change camera replacement mode.'
+              : cameras.length === 0
+              ? 'Android has not reported any camera IDs in this environment.'
+              : both && bothRouteExists
+              ? 'The same source stays active when another app switches between front and back cameras.'
               : !selectedCameraExists
               ? 'Select one of the camera IDs available on this device.'
               : 'Routing changes apply when a camera client opens a new session.'}
           </Text>
+          {!bothSupported && cameras.length > 0 && (
+            <Text style={s.muted}>
+              Both-camera replacement requires front and back cameras and a
+              bridge that reports support for both.
+            </Text>
+          )}
+        </View>
+        <View style={s.card}>
+          <Text style={s.label}>Reframe in other apps</Text>
+          <Text style={s.muted}>
+            Apps that send camera zoom or crop requests can adjust the virtual
+            feed with their own controls. For other apps, use the optional
+            floating controller inside VMOS to zoom, move and reset the actual
+            camera frames.
+          </Text>
+          {overlay?.supported ? (
+            overlay.permissionGranted ? (
+              <Choice
+                label={
+                  overlay.visible
+                    ? 'Hide Floating Controller'
+                    : 'Show Floating Controller'
+                }
+                disabled={busy || (!overlay.visible && !status?.uri)}
+                onPress={() =>
+                  run(() => camera.overlayVisible(!overlay.visible))
+                }
+              />
+            ) : (
+              <Choice
+                label="Allow Floating Controller"
+                disabled={busy}
+                onPress={() => run(camera.requestOverlayPermission)}
+              />
+            )
+          ) : (
+            <Text style={s.muted}>
+              {overlay?.message ?? 'Checking floating controller availability…'}
+            </Text>
+          )}
+          {!!overlay?.message && overlay.supported && (
+            <Text style={s.muted}>{overlay.message}</Text>
+          )}
         </View>
         {!!error && (
           <Text accessibilityRole="alert" style={s.error}>
@@ -259,6 +416,13 @@ export function CameraScreen() {
         )}
         {status?.phase === 'error' && (
           <Text style={s.error}>{status.message}</Text>
+        )}
+        {(status?.phase === 'error' || !!error) && (
+          <Choice
+            label="Retry camera check"
+            disabled={busy}
+            onPress={() => run(async () => undefined)}
+          />
         )}
         <Pressable
           testID="camera-activation"
@@ -285,9 +449,16 @@ export function CameraScreen() {
             </Text>
           )}
         </Pressable>
+        {activating && (
+          <Choice
+            label={cancelling ? 'Cancelling activation…' : 'Cancel activation'}
+            disabled={cancelling}
+            onPress={cancelActivation}
+          />
+        )}
         <Text style={s.footnote}>
           {active
-            ? 'The native system service continues after you leave this app. Close and reopen your camera app to use the new source.'
+            ? 'The integrated background service keeps supplying frames after you leave this screen. Reopen the other camera app to use a changed source.'
             : support?.supported
             ? 'Activation verifies the selected camera route, native frame delivery and actual YUV/JPEG capture before reporting Active.'
             : `${support?.code ?? 'CHECKING_SYSTEM'}: ${
@@ -295,6 +466,16 @@ export function CameraScreen() {
                 'Checking the platform broker, camera provider and CameraService routing hook…'
               }`}
         </Text>
+        {(onDiagnostics || onSetup) && (
+          <View style={s.row}>
+            {!!onDiagnostics && (
+              <Choice label="Diagnostics" onPress={onDiagnostics} />
+            )}
+            {!!onSetup && (
+              <Choice label="Environment setup" onPress={onSetup} />
+            )}
+          </View>
+        )}
         <View style={s.footer}>
           <Text style={s.footerText}>NATIVE FRAME ENGINE</Text>
           <Text style={s.footerText}>
@@ -355,6 +536,8 @@ const s = StyleSheet.create({
   section: { fontSize: 11, color: '#6b8d83', letterSpacing: 1, marginTop: 8 },
   sectionTitle: { fontSize: 14, letterSpacing: 0, color: '#d8e2ee' },
   row: { flexDirection: 'row', gap: 10 },
+  resolutionScroll: { flexGrow: 0, maxHeight: 60 },
+  resolutionChoices: { flexDirection: 'row', gap: 10, paddingBottom: 8 },
   choice: {
     flex: 1,
     minHeight: 43,
@@ -368,6 +551,12 @@ const s = StyleSheet.create({
   },
   selected: { backgroundColor: '#213c36', borderColor: '#548c79' },
   choiceText: { fontSize: 12, color: '#b8c6d7', fontWeight: '600' },
+  choiceContentWidth: {
+    flex: 0,
+    flexShrink: 0,
+    minWidth: 124,
+    paddingHorizontal: 16,
+  },
   selectedText: { color: '#a1f4d2' },
   disabled: { opacity: 0.45 },
   preview: {

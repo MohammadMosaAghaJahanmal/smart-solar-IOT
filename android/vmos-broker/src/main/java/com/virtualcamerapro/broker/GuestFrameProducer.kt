@@ -28,8 +28,14 @@ internal class GuestFrameProducer(
     val sourceHash: String,
     private val cameraName: String,
     initialSettings: OutputSettings,
+    private val cameraNames: List<String> = listOf(cameraName),
     private val onError: (Throwable) -> Unit
 ) : AutoCloseable {
+    init {
+        require(cameraNames.isNotEmpty() && cameraNames.size <= 32 && cameraNames.distinct().size == cameraNames.size && cameraName in cameraNames)
+        require((initialSettings.replacementMode == "both") == (cameraNames.size > 1))
+        require(cameraNames.all { it.matches(Regex("[A-Za-z0-9_.-]{1,128}")) })
+    }
     @Volatile var settings = initialSettings; private set
     val generation = UUID.randomUUID().toString()
     private val raw = listOf(File(directory, "$generation-0.raw"), File(directory, "$generation-1.raw"))
@@ -111,7 +117,8 @@ internal class GuestFrameProducer(
 
     /** Keep the decoder, native source generation and camera connections alive. */
     fun updateSettings(next: OutputSettings): Pair<Long, Long> {
-        require(next.width == settings.width && next.height == settings.height && next.cameraId == settings.cameraId)
+        require(next.width == settings.width && next.height == settings.height && next.cameraId == settings.cameraId &&
+            next.replacementMode == settings.replacementMode)
         val engine = requireNotNull(output)
         synchronized(this) {
             check(active && publication) { "The guest source is inactive" }
@@ -143,7 +150,9 @@ internal class GuestFrameProducer(
 
     /** Each file replacement gets a new inode; an already mapped frame stays valid. */
     private fun publishConfig() {
-        val config = "VCAM2\nid=$generation\nsequence=$sequence\ncamera_name=$cameraName\npath=${requireNotNull(currentRaw).absolutePath}\nformat=RGBA\nwidth=${settings.width}\nheight=${settings.height}\nfps=30\nframes=1\nloop=1\nsha256=$sourceHash\nexpires_ns=$expiresNs\n"
+        val protocol = if (cameraNames.size > 1) "VCAM3" else "VCAM2"
+        val routes = if (cameraNames.size > 1) "camera_names=${cameraNames.joinToString(",")}\n" else ""
+        val config = "$protocol\nid=$generation\nsequence=$sequence\ncamera_name=$cameraName\n${routes}path=${requireNotNull(currentRaw).absolutePath}\nformat=RGBA\nwidth=${settings.width}\nheight=${settings.height}\nfps=30\nframes=1\nloop=1\nsha256=$sourceHash\nexpires_ns=$expiresNs\n"
         writeFrameAtomic(File(directory, "source.cfg"), config.toByteArray(Charsets.UTF_8))
     }
 

@@ -96,9 +96,23 @@ bool ownedObjectMatches(const struct stat& named, const struct stat& opened, uid
 struct OwnedObject {
     struct stat named{}, opened{};
 };
+struct PublicationChanged : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
 OwnedObject ownedObject(const std::string& path, int fd) {
     OwnedObject result;
     check(fd >= 0 && !lstat(path.c_str(), &result.named) && !fstat(fd, &result.opened), "cannot inspect owned object and descriptor");
+        // Atomic frame/config publication can replace the pathname between open
+        // and lstat. Never accept that descriptor: let the source reader reopen
+        // and validate the new object without discarding its generation counters.
+        if (S_ISREG(result.named.st_mode) && S_ISREG(result.opened.st_mode) &&
+            result.named.st_uid == geteuid() && (result.opened.st_uid == geteuid() || expectedVmosGuest()) &&
+            result.named.st_dev == result.opened.st_dev &&
+            (result.named.st_ino != result.opened.st_ino || !result.named.st_nlink || !result.opened.st_nlink) &&
+            !(result.named.st_mode & 0077) && !(result.opened.st_mode & 0077) &&
+            result.named.st_nlink <= 1 && result.opened.st_nlink <= 1) {
+            throw PublicationChanged("source publication changed during descriptor validation");
+        }
     if (!ownedObjectMatches(result.named, result.opened, geteuid(), expectedVmosGuest())) {
         throw std::runtime_error("owned pathname does not match opened descriptor: owner=" + std::to_string(geteuid())
             + " namedUid=" + std::to_string(result.named.st_uid) + " fdUid=" + std::to_string(result.opened.st_uid)
@@ -333,6 +347,12 @@ Crops crops;
 
 struct Source {
     std::string id, path, format, hash, cameraName;
+    std::vector<std::string> cameraNames;
+    struct Delivery {
+        std::mutex mutex;
+        std::map<std::string, uint64_t> cameras;
+    };
+    std::shared_ptr<Delivery> delivery = std::make_shared<Delivery>();
     unsigned width = 0, height = 0, fps = 0, frames = 0;
     bool loop = false;
     bool live = false;
@@ -346,6 +366,15 @@ struct Source {
     Source() = default;
     Source(const Source&) = delete;
     Source& operator=(const Source&) = delete;
+    bool matches(const std::string& camera) const {
+        return !camera.empty() && (cameraNames.empty() ? camera == cameraName :
+            std::find(cameraNames.begin(), cameraNames.end(), camera) != cameraNames.end());
+    }
+    void delivered(const std::string& camera) {
+        ++*deliveredFrames;
+        std::lock_guard<std::mutex> guard(delivery->mutex);
+        ++delivery->cameras[camera];
+    }
     unsigned frameAt(int64_t time) const {
         uint64_t frame = uint64_t(std::max<int64_t>(0, time - createdNs)) * fps / 1000000000;
         return loop ? unsigned(frame % frames) : unsigned(std::min<uint64_t>(frame, frames - 1));
@@ -370,6 +399,7 @@ public:
     std::string executablePath() const { return directory_.substr(0, directory_.rfind('/')) + "/vmos-camera-proxy"; }
     std::shared_ptr<Source> current(int64_t time) {
         std::lock_guard<std::mutex> guard(mutex_);
+        for (unsigned attempt = 0; attempt < 4; ++attempt) {
         try {
             Fd config(openat(directoryFd_.value, "source.cfg", O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
             if (config.value < 0 && errno == ENOENT) { source_.reset(); return nullptr; }
@@ -387,8 +417,9 @@ public:
             }
             std::istringstream input(text);
             std::string line;
-            check(bool(std::getline(input, line)) && (line == "VCAM1" || line == "VCAM2"), "unknown source.cfg protocol");
-            bool live = line == "VCAM2";
+            check(bool(std::getline(input, line)) && (line == "VCAM1" || line == "VCAM2" || line == "VCAM3"), "unknown source.cfg protocol");
+            bool multi = line == "VCAM3";
+            bool live = line != "VCAM1";
             std::map<std::string, std::string> fields;
             while (std::getline(input, line)) {
                 auto at = line.find('=');
@@ -397,6 +428,19 @@ public:
             std::string id = fields.at("id"), path = fields.at("path"), format = fields.at("format"), hash = fields.at("sha256"), cameraName = fields.at("camera_name");
             check(safeId(id) && sha256(hash), "invalid source identity");
             check(cameraNameValid(cameraName), "invalid target camera name");
+            std::vector<std::string> cameraNames{cameraName};
+            if (multi) {
+                cameraNames.clear();
+                std::istringstream routes(fields.at("camera_names"));
+                std::string name;
+                while (std::getline(routes, name, ',')) {
+                    check(cameraNameValid(name) && cameraNames.size() < 32 &&
+                        std::find(cameraNames.begin(), cameraNames.end(), name) == cameraNames.end(), "invalid or duplicate target camera route");
+                    cameraNames.push_back(name);
+                }
+                check(cameraNames.size() >= 2 && fields.at("camera_names").back() != ',' &&
+                    std::find(cameraNames.begin(), cameraNames.end(), cameraName) != cameraNames.end(), "multi-camera routes omit primary camera or contain too few routes");
+            } else check(!fields.count("camera_names"), "multiple routes require VCAM3");
             check(path.rfind(directory_ + "/", 0) == 0 && path.find("..") == std::string::npos && path.find('\0') == std::string::npos, "source path outside private directory");
             std::string filename = path.substr(directory_.size() + 1);
             check(!filename.empty() && filename.find('/') == std::string::npos, "raw source must be a direct child of private directory");
@@ -414,7 +458,7 @@ public:
             size_t frameSize = size_t(width) * height * (format == "RGBA" ? 4 : 3) / (format == "RGBA" ? 1 : 2);
             check(frameSize <= kMaxSource / frames, "source exceeds 256 MiB limit");
             if (source_ && source_->id == id) {
-                check(source_->cameraName == cameraName && source_->width == width && source_->height == height && source_->fps == fps && source_->frames == frames && source_->loop == loop && source_->format == format && source_->hash == hash && source_->live == live, "source identity reused with changed media");
+                check(source_->cameraName == cameraName && source_->cameraNames == cameraNames && source_->width == width && source_->height == height && source_->fps == fps && source_->frames == frames && source_->loop == loop && source_->format == format && source_->hash == hash && source_->live == live, "source identity reused with changed media");
                 check(live || source_->path == path, "source identity reused with changed file");
                 check(!live || sequence >= source_->sequence, "live source sequence went backwards");
                 if (!live || sequence == source_->sequence) {
@@ -441,33 +485,49 @@ public:
                 check(!std::memcmp(header, "VCAMFR2\n", 8), "invalid live frame header");
                 uint64_t frameSequence = 0;
                 for (unsigned i = 8; i < 16; ++i) frameSequence = (frameSequence << 8) | header[i];
+                if (frameSequence > sequence) throw PublicationChanged("raw ring advanced during config read");
                 check(frameSequence == sequence, "live frame sequence does not match source.cfg");
             }
             fresh->id = id; fresh->path = path; fresh->format = format; fresh->hash = hash; fresh->cameraName = cameraName;
+            fresh->cameraNames = std::move(cameraNames);
             fresh->width = width; fresh->height = height; fresh->fps = fps; fresh->frames = frames;
             fresh->loop = loop; fresh->live = live; fresh->sequence = sequence; fresh->frameSize = frameSize; fresh->createdNs = time; fresh->expiresNs = expires;
             bool sameGeneration = source_ && source_->id == id;
             if (sameGeneration) {
                 fresh->createdNs = source_->createdNs;
                 fresh->deliveredFrames = source_->deliveredFrames;
+                fresh->delivery = source_->delivery;
             }
             source_ = fresh;
             lastError_.clear();
             if (!sameGeneration) log("source configured id=" + id + " format=" + format + " size=" + std::to_string(width) + "x" + std::to_string(height) + " frames=" + std::to_string(frames) + " live=" + (live ? "1" : "0"));
             return fresh;
+        } catch (const PublicationChanged&) {
+            if (attempt < 3) continue;
+            // Fail closed for this request; no unvalidated pixels are served.
+            // Keep only the previous validated generation's accounting for retry.
+            return nullptr;
         } catch (const std::exception& error) {
             source_.reset();
             if (lastError_ != error.what()) { lastError_ = error.what(); log("source inactive: " + lastError_); }
             return nullptr;
         }
+        }
+        return nullptr;
     }
 };
 
 uint8_t clamp(int value) { return uint8_t(std::clamp(value, 0, 255)); }
 struct Rgb { int r, g, b; };
-unsigned cropCoordinate(unsigned position, unsigned outputExtent, unsigned sourceExtent, unsigned offset, unsigned extent, unsigned activeExtent) {
-    uint64_t numerator = (uint64_t(offset) * outputExtent + uint64_t(position) * extent) * sourceExtent;
-    return unsigned(std::min<uint64_t>(sourceExtent - 1, numerator / (uint64_t(activeExtent) * outputExtent)));
+unsigned cropCoordinate(unsigned position, unsigned outputExtent, unsigned sourceOffset, unsigned sourceExtent,
+                        unsigned offset, unsigned extent, unsigned baselineOffset, unsigned baselineExtent) {
+    // A freeform sensor crop can extend beyond the uncropped stream's aspect
+    // window. Signed subtraction and explicit edge clamping prevent wraparound
+    // while keeping its motion relative to that stream's actual baseline.
+    const int64_t numerator = ((int64_t(offset) - baselineOffset) * outputExtent + int64_t(position) * extent) * sourceExtent;
+    if (numerator <= 0) return sourceOffset;
+    return sourceOffset + unsigned(std::min<uint64_t>(sourceExtent - 1,
+        uint64_t(numerator) / (uint64_t(baselineExtent) * outputExtent)));
 }
 Crop streamCrop(Crop crop, unsigned width, unsigned height) {
     // Android SCALER_CROP_REGION is a sensor-space rectangle. Each stream
@@ -487,9 +547,29 @@ Crop streamCrop(Crop crop, unsigned width, unsigned height) {
     }
     return crop;
 }
-Rgb pixel(const Source& source, unsigned frame, unsigned x, unsigned y, unsigned outWidth, unsigned outHeight, const Crop& crop = {}) {
-    unsigned sx = cropCoordinate(x, outWidth, source.width, crop.left, crop.width, crop.activeWidth);
-    unsigned sy = cropCoordinate(y, outHeight, source.height, crop.top, crop.height, crop.activeHeight);
+struct SourceView {
+    Crop target, baseline, source;
+    bool full() const {
+        return source.full() && target.left == baseline.left && target.top == baseline.top
+            && target.width == baseline.width && target.height == baseline.height;
+    }
+};
+SourceView sourceView(const Source& source, unsigned width, unsigned height, const Crop& crop) {
+    const Crop sourceFrame{0,0,source.width,source.height,source.width,source.height};
+    // Until sensor metadata arrives, preserve the original raw frame scaling.
+    if (crop.activeWidth == 1 && crop.activeHeight == 1) return {crop,crop,sourceFrame};
+    const Crop sensorFrame{0,0,crop.activeWidth,crop.activeHeight,crop.activeWidth,crop.activeHeight};
+    // The producer already rendered a complete output image. The sensor's
+    // aspect crop defines the neutral stream window, not a second media zoom.
+    // A differently shaped consumer stream first takes its own source aspect
+    // window; public sensor zoom and movement are relative to that baseline.
+    return {streamCrop(crop,width,height),streamCrop(sensorFrame,width,height),streamCrop(sourceFrame,width,height)};
+}
+Rgb pixel(const Source& source, unsigned frame, unsigned x, unsigned y, unsigned outWidth, unsigned outHeight, const SourceView& view) {
+    unsigned sx = cropCoordinate(x, outWidth, view.source.left, view.source.width,
+        view.target.left, view.target.width, view.baseline.left, view.baseline.width);
+    unsigned sy = cropCoordinate(y, outHeight, view.source.top, view.source.height,
+        view.target.top, view.target.height, view.baseline.top, view.baseline.height);
     const uint8_t* p = source.bytes + size_t(frame) * source.frameSize;
     if (source.format == "RGBA") {
         p += (size_t(sy) * source.width + sx) * 4;
@@ -507,7 +587,7 @@ size_t videoSize(unsigned width, unsigned height, uint32_t format) {
     return 0;
 }
 void renderRgb(const Source& source, unsigned frame, unsigned width, unsigned height, bool bgr, uint8_t* destination, const Crop& crop = {}) {
-    const Crop view = streamCrop(crop, width, height);
+    const SourceView view = sourceView(source, width, height, crop);
     for (unsigned y = 0; y < height; ++y) for (unsigned x = 0; x < width; ++x) {
         Rgb p = pixel(source, frame, x, y, width, height, view);
         *destination++ = uint8_t(bgr ? p.b : p.r);
@@ -517,7 +597,7 @@ void renderRgb(const Source& source, unsigned frame, unsigned width, unsigned he
     }
 }
 void renderYuv(const Source& source, unsigned frame, unsigned width, unsigned height, uint32_t format, uint8_t* destination, const Crop& crop = {}) {
-    const Crop view = streamCrop(crop, width, height);
+    const SourceView view = sourceView(source, width, height, crop);
     size_t pixels = size_t(width) * height;
     // The exact I420 case needs no RGB round trip, preserving decoded video.
     if (source.format == "I420") {
@@ -527,13 +607,17 @@ void renderYuv(const Source& source, unsigned frame, unsigned width, unsigned he
         const uint8_t* v = u + sourcePixels / 4;
         if (source.width == width && source.height == height && view.full()) std::memcpy(destination, input, pixels);
         else for (unsigned y = 0; y < height; ++y) for (unsigned x = 0; x < width; ++x) {
-            unsigned sx = cropCoordinate(x, width, source.width, view.left, view.width, view.activeWidth);
-            unsigned sy = cropCoordinate(y, height, source.height, view.top, view.height, view.activeHeight);
+            unsigned sx = cropCoordinate(x, width, view.source.left, view.source.width,
+                view.target.left, view.target.width, view.baseline.left, view.baseline.width);
+            unsigned sy = cropCoordinate(y, height, view.source.top, view.source.height,
+                view.target.top, view.target.height, view.baseline.top, view.baseline.height);
             destination[size_t(y) * width + x] = input[size_t(sy) * source.width + sx];
         }
         for (unsigned y = 0; y < height; y += 2) for (unsigned x = 0; x < width; x += 2) {
-            unsigned sx = cropCoordinate(x, width, source.width, view.left, view.width, view.activeWidth);
-            unsigned sy = cropCoordinate(y, height, source.height, view.top, view.height, view.activeHeight);
+            unsigned sx = cropCoordinate(x, width, view.source.left, view.source.width,
+                view.target.left, view.target.width, view.baseline.left, view.baseline.width);
+            unsigned sy = cropCoordinate(y, height, view.source.top, view.source.height,
+                view.target.top, view.target.height, view.baseline.top, view.baseline.height);
             size_t at = size_t(y / 2) * (width / 2) + x / 2;
             size_t sourceAt = size_t(sy / 2) * (source.width / 2) + sx / 2;
             if (format == kI420 || format == kYv12) {
@@ -595,7 +679,22 @@ public:
             << ",\"sequence\":" << (source ? source->sequence : 0)
             << ",\"live\":" << (source && source->live ? "true" : "false")
             << ",\"cameraName\":\"" << (source ? source->cameraName : "") << "\",\"sourceFrame\":" << frame << ",\"width\":" << width << ",\"height\":" << height
-            << ",\"pixelFormat\":" << format << "}\n";
+            << ",\"pixelFormat\":" << format << ",\"cameraNames\":[";
+        if (source) for (size_t i = 0; i < source->cameraNames.size(); ++i) {
+            if (i) out << ',';
+            out << '"' << source->cameraNames[i] << '"';
+        }
+        out << "],\"cameraFrames\":{";
+        if (source) {
+            std::lock_guard<std::mutex> deliveryGuard(source->delivery->mutex);
+            bool first = true;
+            for (const auto& entry : source->delivery->cameras) {
+                if (!first) out << ',';
+                first = false;
+                out << '"' << entry.first << "\":" << entry.second;
+            }
+        }
+        out << "}}\n";
         std::string text = out.str();
         const char* p = text.data(); size_t remaining = text.size();
         while (remaining) {
@@ -631,7 +730,7 @@ struct Stream {
         } catch (const std::exception& error) { started = false; log(std::string("transparent stream: ") + error.what() + " command=" + command); }
     }
     bool overrideFrame(const std::string& command, std::vector<uint8_t>& reply, const std::shared_ptr<Source>& source, int64_t time, unsigned& sourceFrame, bool vmosPadded = false, const Crop& crop = {}) const {
-        if (!started || !source || cameraName.empty() || cameraName != source->cameraName || time >= source->expiresNs || command.rfind("frame ", 0) != 0 || reply.size() < 3 || std::memcmp(reply.data(), "ok:", 3)) return false;
+        if (!started || !source || !source->matches(cameraName) || time >= source->expiresNs || command.rfind("frame ", 0) != 0 || reply.size() < 3 || std::memcmp(reply.data(), "ok:", 3)) return false;
         try {
             auto p = parameters(command);
             size_t video = size_t(number(p.at("video"), kMaxReply));
@@ -788,7 +887,7 @@ void serve(int accepted, const std::string& original, Sources& sources, Status& 
             bool replaced = stream.overrideFrame(command, response, source, time, frame, vmosPadded, crop);
             writeExact(client.value, header.data(), header.size());
             writeExact(client.value, response.data(), response.size());
-            if (replaced) { ++totalFrames; ++*source->deliveredFrames; status.write(source, frame, stream.width, stream.height, stream.format); }
+            if (replaced) { ++totalFrames; source->delivered(stream.cameraName); status.write(source, frame, stream.width, stream.height, stream.format); }
             else if (!source) status.write(nullptr, 0, 0, 0, 0);
         }
     } catch (const std::exception& error) { log(std::string("connection ended: ") + error.what()); }

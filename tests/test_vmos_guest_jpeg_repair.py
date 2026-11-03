@@ -90,6 +90,19 @@ d = r / 'proc' / pid; d.mkdir(exist_ok=True)
 (d / 'cmdline').write_bytes(os.environ['MOCK_PROVIDER'].encode() + b'\\0')
 """)
         self.mock("sleep", "#!/bin/sh\nexit 0\n")
+        # The lock records the actual test shell's process start ticks. Guest
+        # provider paths stay in the fixture; only that process stat is read
+        # from the real host proc tree when it has no simulated counterpart.
+        self.mock("cat", """#!/usr/bin/python3
+import os, pathlib, re, sys
+args = sys.argv[1:]
+if len(args) == 1:
+    prefix = os.environ['MOCK_ROOT']
+    match = re.fullmatch(re.escape(prefix) + r'/proc/([0-9]+)/stat', args[0])
+    if match and not pathlib.Path(args[0]).exists():
+        args = ['/proc/' + match.group(1) + '/stat']
+os.execv('/bin/cat', ['cat'] + args)
+""")
         # Rewrite only the test copy; production has no environment path override.
         script = SCRIPT.read_text()
         for prefix in ("/vendor", "/data", "/proc"):

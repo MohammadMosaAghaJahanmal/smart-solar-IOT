@@ -18,6 +18,7 @@ legacy=/data/local/tmp/vcam-jpeg-repair.json
 lock=/vendor/lib64/.vcam-jpeg-repair-lock
 temporary=$lock/importer.tmp
 record_tmp=$lock/journal.tmp
+lock_owner=$lock/owner.txt
 original=be8cbff7d20ec7f9e8ea16645ca919196e174911bb7cfcfbcac458acaa8b6acc
 patched=b572750c30143af55a8b8ec4bc1a60017cac3ffec512deb5edffb054877817ab
 provider=/vendor/bin/hw/android.hardware.camera.provider@2.4-service
@@ -32,6 +33,8 @@ hw_created=0
 locked=0
 staged=0
 record_staged=0
+owner_created=0
+owner_text=
 
 fail() { echo "VMOS_JPEG_REPAIR_REFUSED: $*" >&2; exit 1; }
 digest() { sha256sum "$1" | cut -d' ' -f1; }
@@ -40,15 +43,62 @@ known() { regular "$1" && [ "$(digest "$1")" = "$2" ]; }
 owned_file() { regular "$1" && [ "$(stat -c %u "$1")" = 0 ] && [ "$(stat -c %h "$1")" = 1 ]; }
 attributes() { stat -c '%a:%u:%g' "$1"; }
 directory() { [ -d "$1" ] && [ ! -L "$1" ]; }
+process_start() {
+    process_stat=$(cat "/proc/$1/stat") || return 1
+    process_stat=${process_stat##*) }
+    set -- $process_stat
+    [ "$#" -ge 20 ] || return 1
+    shift 19
+    case "$1" in ''|*[!0-9]*) return 1;; esac
+    printf '%s' "$1"
+}
+acquire_lock() {
+    if ! mkdir "$lock" 2>/dev/null; then
+        directory "$lock" && [ "$(stat -c %u "$lock")" = 0 ] && [ "$(stat -c %a "$lock")" = 700 ] || fail 'Unknown repair lock directory was preserved.'
+        owned_file "$lock_owner" && [ "$(stat -c %s "$lock_owner")" -le 256 ] || fail 'Repair lock has no verified process owner; it was preserved.'
+        old_owner=$(cat "$lock_owner")
+        [ "$(printf '%s\n' "$old_owner" | wc -l | tr -d ' ')" = 3 ] || fail 'Unknown repair lock owner fields.'
+        [ "$(printf '%s\n' "$old_owner" | head -1)" = VCAM_JPEG_LOCK_1 ] || fail 'Unknown repair lock owner version.'
+        owner_pid=$(printf '%s\n' "$old_owner" | sed -n '2s/^pid=//p')
+        owner_start=$(printf '%s\n' "$old_owner" | sed -n '3s/^start=//p')
+        case "$owner_pid:$owner_start" in *[!0-9:]*|:*) fail 'Unknown repair lock process identity.';; esac
+        [ "$owner_pid" -gt 1 ] && [ -n "$owner_start" ] || fail 'Invalid repair lock process identity.'
+        if [ -d "/proc/$owner_pid" ] || kill -0 "$owner_pid" 2>/dev/null; then
+            live_start=$(process_start "$owner_pid") || fail 'Repair lock owner liveness could not be verified.'
+            [ "$live_start" != "$owner_start" ] || fail 'Another verified repair operation is still active.'
+        fi
+        # Only one recovery attempt can inspect/remove this stale lock. Unknown
+        # files or an interrupted recovery remain preserved for diagnostics.
+        mkdir "$lock/recovery" 2>/dev/null || fail 'Another recovery or an unrecognized recovery marker exists.'
+        [ "$(cat "$lock_owner")" = "$old_owner" ] || fail 'Repair lock ownership changed during recovery.'
+        [ ! -e "$temporary" ] && [ ! -L "$temporary" ] && [ ! -e "$record_tmp" ] && [ ! -L "$record_tmp" ] || fail 'Interrupted staging files were preserved for inspection.'
+        for lock_entry in "$lock"/* "$lock"/.[!.]* "$lock"/..?*; do
+            [ -e "$lock_entry" ] || [ -L "$lock_entry" ] || continue
+            case "$lock_entry" in "$lock_owner"|"$lock/recovery") ;; *) fail 'Unknown repair lock contents were preserved.';; esac
+        done
+        rm "$lock_owner"
+        rmdir "$lock/recovery"
+        rmdir "$lock" || fail 'Unknown repair lock contents were preserved.'
+        mkdir "$lock" 2>/dev/null || fail 'Another repair acquired the recovered lock.'
+    fi
+    locked=1
+    trap cleanup EXIT
+    trap 'exit 1' HUP INT TERM
+    own_start=$(process_start "$$") || fail 'Could not establish this repair process start identity.'
+    owner_text=$(printf 'VCAM_JPEG_LOCK_1\npid=%s\nstart=%s' "$$" "$own_start")
+    printf '%s\n' "$owner_text" > "$lock_owner"
+    owner_created=1
+    chmod 600 "$lock_owner"
+}
 require_guest() {
     [ "$(id -u)" = 0 ] || fail 'Run under independently verified guest UID 0.'
     [ "$(getprop ro.hardware)" = vphw90 ] || fail 'Expected vphw90 guest.'
     [ "$(getprop ro.build.version.sdk)" = 28 ] || fail 'Expected API 28 guest.'
     [ "$(getprop ro.product.cpu.abilist)" = arm64-v8a ] || fail 'Expected ARM64-only guest.'
-    case "$(getprop ro.build.fingerprint)" in
-        *:9/PQ3A.190801.002/eng.builds.20191015.144423:user/release-keys) ;;
-        *) fail 'The guest framework build is not the inspected ROM10075 build.';;
-    esac
+    # VMOS substitutes host product and build-user labels. These labels do not
+    # select a patch: all provider/importer/encoder/HAL bytes remain pinned below.
+    getprop ro.build.fingerprint | grep -Eq '^[^[:space:]:]+:9/PQ3A\.190801\.002/eng\.[A-Za-z0-9_-]+\.20191015\.144423:user/release-keys$' ||
+        fail 'The guest framework build is not the inspected ROM10075 build.'
     [ "$(getenforce)" = Disabled ] || fail 'Only the inspected SELinux-disabled guest is supported.'
     for folder in /vendor /vendor/lib64 /vendor/lib64/hw /vendor/bin /vendor/bin/hw /data /data/local /data/local/tmp; do
         directory "$folder" || fail "Expected a real guest directory: $folder"
@@ -103,7 +153,10 @@ cleanup() {
     fi
     if [ "$staged" = 1 ] && regular "$temporary"; then rm "$temporary"; fi
     if [ "$record_staged" = 1 ] && regular "$record_tmp"; then rm "$record_tmp"; fi
-    if [ "$locked" = 1 ]; then rmdir "$lock" || true; fi
+    if [ "$locked" = 1 ]; then
+        if [ "$owner_created" = 1 ] && owned_file "$lock_owner" && [ "$(cat "$lock_owner")" = "$owner_text" ]; then rm "$lock_owner"; fi
+        rmdir "$lock" || true
+    fi
     exit "$result"
 }
 require_guest
@@ -121,10 +174,7 @@ if [ "$action" = inspect ]; then
     echo "helperCompatibilityLink=$(if [ -L "$helper_link" ]; then readlink "$helper_link"; else echo absent; fi)"
     exit 0
 fi
-mkdir "$lock" 2>/dev/null || fail 'Another repair operation or a preserved recovery lock exists.'
-locked=1
-trap cleanup EXIT
-trap 'exit 1' HUP INT TERM
+acquire_lock
 
 if [ "$action" = install ]; then
     [ "$current" = "$original" ] || fail 'The repair is already installed; inspect it instead of overwriting recovery state.'

@@ -29,10 +29,13 @@ internal class GuestRuntime(private val context: Context) {
     private val installRecord = File(context.filesDir, "guest-installation.json")
     private val baselineFailure = File(context.filesDir, "guest-baseline-failure.json")
     private var process: Process? = null
+    private val integrated get() = context.packageName == "com.virtualcamerapro"
 
     fun requireGuest() {
         if (Build.VERSION.SDK_INT != 28 || Build.HARDWARE != "vphw90" || "arm64-v8a" !in Build.SUPPORTED_ABIS)
-            throw GuestFailure("VMOS_GUEST_REQUIRED", "This broker is restricted to the inspected ARM64 Android 9 vphw90 guest", "Open the controller and broker inside that VMOS guest. This APK does not alter the physical phone.")
+            throw GuestFailure("VMOS_GUEST_REQUIRED", "This camera backend requires the validated ARM64 Android 9 vphw90 guest",
+                if (integrated) "Open Virtual Camera Pro inside the compatible VMOS guest and use its setup assistant. This APK does not alter the physical phone."
+                else "Open the controller and broker inside that VMOS guest. This APK does not alter the physical phone.")
     }
 
     fun identity(): JSONObject = JSONObject().put("sdk", Build.VERSION.SDK_INT).put("hardware", Build.HARDWARE)
@@ -71,6 +74,19 @@ internal class GuestRuntime(private val context: Context) {
         return result
     }
 
+    private fun launchProxy(): Process {
+        val uid = android.os.Process.myUid()
+        check(uid >= 10000) { "The camera worker must belong to the ordinary application UID" }
+        fun quote(value: String) = "'" + value.replace("'", "'\\''") + "'"
+        // Enter through the guest's ordinary system shell and verify its UID
+        // before exec. The inspected VMOS build can mislabel a direct private
+        // ELF launch immediately after its root installer has finished.
+        val command = "[ \"$(/system/bin/id -u)\" = '$uid' ] || exit 73\nexec " +
+            listOf(executable.absolutePath,"--listen",SOCKET,"--original",ORIGINAL_SOCKET,"--state-dir",stateDir.absolutePath).joinToString(" ") { quote(it) }
+        return ProcessBuilder("/system/bin/sh","-c",command).redirectErrorStream(true)
+            .redirectOutput(ProcessBuilder.Redirect.appendTo(File(context.filesDir,"proxy.log"))).start()
+    }
+
     @Synchronized fun start(): String {
         prepareExecutable()
         if (process?.isAlive != true) {
@@ -81,19 +97,16 @@ internal class GuestRuntime(private val context: Context) {
             val direct = runProxy("--list-cameras")
             check(direct.contains("name=")) { "The original camera factory returned no named cameras" }
             runProxy("--selftest")
-            process = ProcessBuilder(executable.absolutePath, "--listen", SOCKET, "--original", ORIGINAL_SOCKET, "--state-dir", stateDir.absolutePath)
-                .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.appendTo(File(context.filesDir, "proxy.log"))).start()
+            process = launchProxy()
         }
         val deadline = SystemClock.elapsedRealtime() + 4000
         while (SystemClock.elapsedRealtime() < deadline) {
-            if (process?.isAlive == false) throw GuestFailure("PROXY_START_FAILED", "The guest proxy could not listen on its designated socket", "Read the broker's private proxy log and check guest socket access.")
+            if (process?.isAlive == false) throw GuestFailure("PROXY_START_FAILED", "The guest proxy exited with code ${process?.exitValue()} before its camera socket became ready", "Read the broker's private proxy log and check guest socket access.")
             val query = runCatching { runProxy("--list-cameras", "--original", SOCKET) }.getOrNull()
             if (query != null && query.contains("name=")) {
-                val identity = runCatching { proxyIdentity(status().getInt("pid")) }.getOrNull()
-                if (identity != null) {
-                    writeAtomic(proxyDeployment, JSONObject().put("pid", identity.pid).put("startTicks", identity.startTicks)
-                        .put("sha256", sha256(executable)).toString().toByteArray(), 0x180)
-                }
+                val identity = proxyIdentity(status().getInt("pid"))
+                writeAtomic(proxyDeployment, JSONObject().put("pid", identity.pid).put("startTicks", identity.startTicks)
+                    .put("sha256", sha256(executable)).toString().toByteArray(), 0x180)
                 // Strict signal authorization belongs to explicit upgrades;
                 // ordinary transport liveness remains a real factory query.
                 return query
@@ -109,7 +122,9 @@ internal class GuestRuntime(private val context: Context) {
             val previous = runCatching { JSONObject(baselineFailure.readText()) }.getOrNull()
             if (previous?.optString("originalSha256") == ORIGINAL_SHA && sha256(original) == ORIGINAL_SHA)
                 throw GuestFailure("VMOS_ORIGINAL_CAMERA_PIPELINE_FAILED", previous.getString("message"), previous.getString("recovery"))
-            throw GuestFailure("VMOS_SETUP_REQUIRED", "The guest camera bridge has not been installed and verified", "Open Virtual Camera VMOS Guest Service inside the guest and run its setup check.")
+            throw GuestFailure("VMOS_SETUP_REQUIRED", "The guest camera bridge has not been installed and verified",
+                if (integrated) "Open Virtual Camera Pro inside the guest and complete its setup assistant."
+                else "Open Virtual Camera VMOS Guest Service inside the guest and run its setup check.")
         }
         val record = JSONObject(installRecord.readText())
         val cropProfile = record.optString("profile") == CROP_PROFILE
@@ -136,6 +151,14 @@ internal class GuestRuntime(private val context: Context) {
     }
 
     fun hasInstallationRecord(): Boolean = installRecord.isFile
+
+    /** The running worker's launch record, rather than replaced on-disk bytes. */
+    fun hasCurrentProxyBundle(): Boolean = runCatching {
+        val deployment = JSONObject(proxyDeployment.readText())
+        val live = proxyIdentity(status().getInt("pid"))
+        deployment.getInt("pid") == live.pid && deployment.getString("startTicks") == live.startTicks &&
+            deployment.getString("sha256") == bundledProxyHash() && sha256(executable) == bundledProxyHash()
+    }.getOrDefault(false)
 
     /** Factory-only liveness check. Never starts a proxy or restarts a provider. */
     fun checkTransport(): String {
@@ -329,7 +352,11 @@ internal class GuestRuntime(private val context: Context) {
         check(sha256(original) == ORIGINAL_SHA)
         restart()
         verifyCameraPipeline()
-        installRecord.delete()
+        // The restored HAL talks directly to the original factory. Retire its
+        // now-unused owned proxy before dropping the recovery transaction, so
+        // clearing this app's data cannot orphan an unverifiable live daemon.
+        stopRestoredProxy()
+        check(!installRecord.exists() || installRecord.delete()) { "Could not finish the guest restoration journal" }
     }
 
     /** Optional, explicit upgrade for apps that issue standard camera crop requests. */
@@ -444,8 +471,7 @@ internal class GuestRuntime(private val context: Context) {
         val link = Os.readlink(File(proc, "exe").absolutePath)
         val direct = (link == executable.absolutePath || link == "${executable.absolutePath} (deleted)") &&
             sha256(File(proc, "exe")) in KNOWN_PROXY_SHAS + bundledProxyHash()
-        val mapped = link.matches(Regex("/data/app/com\\.vmos\\.virtual-[A-Za-z0-9_=+-]+/lib/arm64/libylinker64\\.so")) &&
-            sha256(File(proc, "exe")) == VMOS_LINKER_SHA &&
+        val mapped = VmosHostIdentity.isPinnedLauncher(link, sha256(File(proc, "exe")), fromProcExe = true) &&
             ((executable.isFile && sha256(executable) in KNOWN_PROXY_SHAS + bundledProxyHash()) &&
                 (!previousExecutable.exists() || sha256(previousExecutable) in KNOWN_PROXY_SHAS))
         check(direct || mapped) { "Guest proxy executable is not the known native binary or pinned VMOS launcher" }
@@ -457,13 +483,42 @@ internal class GuestRuntime(private val context: Context) {
 
     private fun bundledProxyHash(): String = context.assets.open("vmos-camera-proxy.sha256").bufferedReader().use { it.readText().trim() }
 
+    private fun proxyProcessPresent(pid: Int): Boolean {
+        check(pid > 1 && pid != android.os.Process.myPid()) { "Invalid guest proxy PID" }
+        return try { Os.kill(pid, 0); true }
+        catch (error: ErrnoException) {
+            if (error.errno == OsConstants.ESRCH) false else throw error
+        }
+    }
+
+    /** A stale status PID alone cannot prove that its socket is no longer live. */
+    private fun stopRestoredProxy() {
+        val pid = status().getInt("pid")
+        if (proxyProcessPresent(pid)) stopVerifiedProxy(proxyIdentity(pid))
+        android.net.LocalSocket().use { socket ->
+            try {
+                socket.connect(android.net.LocalSocketAddress(SOCKET, android.net.LocalSocketAddress.Namespace.FILESYSTEM))
+            } catch (error: java.io.IOException) {
+                var cause: Throwable? = error
+                while (cause != null) {
+                    if (cause is ErrnoException && cause.errno in setOf(OsConstants.ECONNREFUSED, OsConstants.ENOENT)) return
+                    cause = cause.cause
+                }
+                // Android 9 LocalSocketImpl can discard the ErrnoException.
+                if (error.message?.matches(Regex(".*(?:ECONNREFUSED|ENOENT|Connection refused|No such file or directory).*")) == true) return
+                throw IllegalStateException("Restored proxy socket liveness could not be established", error)
+            }
+            error("A live proxy still owns the restored guest camera transport")
+        }
+    }
+
     private fun stopVerifiedProxy(identity: ProxyIdentity) {
         check(!File(stateDir, "source.cfg").exists()) { "A live source prevents proxy replacement" }
         check(proxyIdentity(identity.pid) == identity) { "Guest proxy identity changed before shutdown" }
         Os.kill(identity.pid, OsConstants.SIGTERM)
         val deadline = SystemClock.elapsedRealtime() + 3000
         while (SystemClock.elapsedRealtime() < deadline) {
-            if (!File("/proc/${identity.pid}").exists()) { process = null; return }
+            if (!proxyProcessPresent(identity.pid)) { process = null; return }
             Thread.sleep(50)
         }
         // Escalate only after rechecking UID, exact argv, executable, start time
@@ -472,7 +527,7 @@ internal class GuestRuntime(private val context: Context) {
         Os.kill(identity.pid, OsConstants.SIGKILL)
         val killedDeadline = SystemClock.elapsedRealtime() + 2000
         while (SystemClock.elapsedRealtime() < killedDeadline) {
-            if (!File("/proc/${identity.pid}").exists()) { process = null; return }
+            if (!proxyProcessPresent(identity.pid)) { process = null; return }
             Thread.sleep(50)
         }
         error("The verified guest proxy did not stop within its bounded deadline")
@@ -494,8 +549,7 @@ internal class GuestRuntime(private val context: Context) {
             writeAtomic(executable, previous, 0x1c0)
             // start() normally refreshes the bundled executable. Launch the
             // preserved known binary directly for this explicit rollback.
-            process = ProcessBuilder(executable.absolutePath, "--listen", SOCKET, "--original", ORIGINAL_SOCKET, "--state-dir", stateDir.absolutePath)
-                .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.appendTo(File(context.filesDir, "proxy.log"))).start()
+            process = launchProxy()
             val deadline = SystemClock.elapsedRealtime() + 4000
             while (SystemClock.elapsedRealtime() < deadline) {
                 if (runCatching { runProxy("--list-cameras", "--original", SOCKET).contains("name=") }.getOrDefault(false)) return
@@ -574,9 +628,13 @@ internal class GuestRuntime(private val context: Context) {
         const val CROP_TRANSPORT = "/vendor/lib64/hw/.vcam-transport-camera.vphw90.so"
         const val SOCKET = "/data/local/tmp/vcam_pipe"
         const val ORIGINAL_SOCKET = "/dev/socket/socket/qemu_pipe"
-        private const val VMOS_LINKER_SHA = "d3806cf0d56869b4fed7f0f8674498d4e6d4e2e7011903ce3380a21e6c1168a4"
         private val KNOWN_PROXY_SHAS = setOf("8855fbf54d0ecae94ba2c13338c52cf90d2997eba465f4ad548477f30e0c4591",
-            "53e32e2d80beefbb77399d34974d89da4fbf8a8fd08313fa67c1b51edee6cee3")
+            "53e32e2d80beefbb77399d34974d89da4fbf8a8fd08313fa67c1b51edee6cee3",
+            "1162c3ef0f3dc4a9b2ebb8fabf558dbbe31aead0ef4fa0c04897c5ca10721bcc",
+            "540d4fb9593574f51a8cf94da2d2dc43aded5b777ee86720c8eba0ccd406e2c6",
+            "14232f10185851bded52a882fcb1d6509e8560fcccb8fe8034163770ee160d1e",
+            "f6d508f0b5412fca1f169a082eec4ce66c844168e9cfae26490e838d546d1e11",
+            "97e4b1ae9be3a8fe422e8a37175f3f440e558ecf3ca64cf38ac1264c41c7a08d")
         fun sha256(file: File): String = file.inputStream().use { input ->
             val hash = MessageDigest.getInstance("SHA-256"); val bytes = ByteArray(65536)
             while (true) { val size = input.read(bytes); if (size < 0) break; hash.update(bytes, 0, size) }

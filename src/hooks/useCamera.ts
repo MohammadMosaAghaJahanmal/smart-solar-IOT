@@ -6,6 +6,7 @@ import type {
   SystemSupport,
   CameraDevice,
   SourceTransform,
+  OverlayStatus,
 } from '../types/camera';
 export function useCamera() {
   const [status, setStatus] = useState<CameraStatus>();
@@ -13,7 +14,9 @@ export function useCamera() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [cameras, setCameras] = useState<CameraDevice[]>([]);
+  const [overlay, setOverlay] = useState<OverlayStatus>();
   const [activating, setActivating] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const refreshing = useRef(false);
   const mounted = useRef(true);
   const pendingTransform = useRef<SourceTransform | undefined>(undefined);
@@ -28,15 +31,22 @@ export function useCamera() {
     }
     refreshing.current = true;
     try {
-      const [next, available, devices] = await Promise.all([
+      const [next, available, devices, overlayState] = await Promise.all([
         camera.status(),
         camera.support(),
         camera.cameras(),
+        camera.overlayStatus().catch(failure => ({
+          supported: false,
+          permissionGranted: false,
+          visible: false,
+          message: failure instanceof Error ? failure.message : String(failure),
+        })),
       ]);
       if (mounted.current) {
         setStatus({ ...next, ...optimisticTransform.current });
         setSupport(available);
         setCameras(devices);
+        setOverlay(overlayState);
       }
     } finally {
       refreshing.current = false;
@@ -131,6 +141,37 @@ export function useCamera() {
       }
     }
   };
+  const cancelActivation = async () => {
+    if (!activating || cancelling) {
+      return;
+    }
+    setCancelling(true);
+    try {
+      // This uses the native Stop executor, independent of pending activation.
+      await camera.deactivate();
+      if (mounted.current) {
+        setActivating(false);
+        setStatus(
+          current =>
+            current && {
+              ...current,
+              phase: 'stopped',
+              message: 'Virtual Camera Stopped',
+              frames: 0,
+              proof: undefined,
+            },
+        );
+      }
+    } catch (failure) {
+      if (mounted.current) {
+        setError(failure instanceof Error ? failure.message : String(failure));
+      }
+    } finally {
+      if (mounted.current) {
+        setCancelling(false);
+      }
+    }
+  };
   return {
     status,
     support,
@@ -138,7 +179,10 @@ export function useCamera() {
     error,
     run,
     cameras,
+    overlay,
     activating,
+    cancelling,
+    cancelActivation,
     updateTransform,
   };
 }

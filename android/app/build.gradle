@@ -72,6 +72,26 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+// One APK reuses the proven guest service and native transport unchanged. The
+// legacy application module remains buildable for regression and rollback.
+def guestAssets = layout.buildDirectory.dir("generated/integratedGuestAssets")
+def bundleIntegratedGuest = tasks.register("bundleIntegratedGuest") {
+    def proxy = file("../../artifacts/vmos/vmos-camera-proxy")
+    def adapter = file("../../artifacts/vmos/camera.vphw90.crop-wrapper.so")
+    inputs.files(proxy, adapter)
+    outputs.dir(guestAssets)
+    doLast {
+        def output = guestAssets.get().asFile
+        output.mkdirs()
+        [proxy, adapter].each { binary ->
+            if (!binary.isFile()) throw new GradleException("Missing verified guest component: ${binary.name}")
+            copy { from binary; into output }
+            def digest = java.security.MessageDigest.getInstance("SHA-256").digest(binary.bytes)
+            new File(output, binary.name + ".sha256").text = digest.collect { String.format("%02x", it & 255) }.join("") + "\n"
+        }
+    }
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -83,7 +103,9 @@ android {
         main {
             java.srcDir "../../native/frame-engine/src/main/java"
             java.srcDir "../../native/camera-probe/src/main/java"
+            java.srcDir "../vmos-broker/src/main/java"
             aidl.srcDir "../../native/ipc"
+            assets.srcDir guestAssets
         }
         androidTest.assets.srcDir "../camera-client/src/androidTest/assets"
     }
@@ -91,8 +113,8 @@ android {
         applicationId "com.virtualcamerapro"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode 5
+        versionName "2.3-intelligent-fallback"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "boolean", "IS_STANDALONE", "false"
     }
@@ -124,8 +146,10 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
-    testBuildType "standalone"
+    testBuildType providers.gradleProperty("cameraTestBuildType").getOrElse("standalone")
 }
+
+tasks.named("preBuild").configure { dependsOn(bundleIntegratedGuest) }
 
 dependencies {
     androidTestImplementation "androidx.test:runner:1.6.2"

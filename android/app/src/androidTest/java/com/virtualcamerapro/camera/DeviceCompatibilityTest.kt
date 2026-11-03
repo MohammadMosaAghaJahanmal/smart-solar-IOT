@@ -21,7 +21,8 @@ class DeviceCompatibilityTest {
         assertFalse(DeviceCompatibility(29, "10", "Vendor", "Phone", listOf("armeabi-v7a")).controllerInstallCompatible)
         val phone = DeviceCompatibility(29, "10", "Infinix", "X687B", listOf("arm64-v8a", "armeabi-v7a")).missingBroker()
         assertEquals("BROKER_MISSING", phone.getString("code"))
-        assertTrue(phone.getString("recovery").contains("requires Android 16 (API 36)"))
+        assertTrue(phone.getString("recovery").contains("integrated guest service does not need a second broker APK"))
+        assertFalse("A guest bridge is not restricted to the reference system image API", phone.getString("recovery").contains("requires Android 16"))
         assertFalse("Do not suggest flashing the x86 reference image onto a phone", phone.getString("recovery").contains("vcam_cf_x86_64_phone"))
     }
 
@@ -34,8 +35,9 @@ class DeviceCompatibilityTest {
             val support = controller.support()
             assertEquals(Build.VERSION.SDK_INT, support.getJSONObject("device").getInt("androidSdk"))
             assertEquals(Build.MODEL, support.getJSONObject("device").getString("model"))
-            assertEquals(2, support.getJSONArray("backendSupport").length())
-            if (context.packageManager.resolveService(android.content.Intent().setComponent(android.content.ComponentName(
+            assertEquals(3, support.getJSONArray("backendSupport").length())
+            if (!com.virtualcamerapro.setup.provisioning.GuestAdapterRegistry.profileMatches() &&
+                context.packageManager.resolveService(android.content.Intent().setComponent(android.content.ComponentName(
                     "com.virtualcamerapro.broker", "com.virtualcamerapro.broker.BrokerService")), 0) == null) {
                 assertFalse(support.getBoolean("supported"))
                 assertEquals("BROKER_MISSING", support.getString("code"))
